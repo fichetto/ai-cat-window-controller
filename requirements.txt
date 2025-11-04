@@ -1,0 +1,16 @@
+# Core dependencies
+numpy==2.0.2
+opencv-python==4.10.0.84
+
+# Serial communication
+pymodbus==3.8.3
+
+# Telegram bot
+python-telegram-bot==21.10
+
+# Hailo AI (install from Hailo SDK)
+# hailo-platform
+# gi (PyGObject for GStreamer)
+
+# Note: Hailo dependencies must be installed separately from Hailo SDK
+# Follow: https://github.com/hailo-ai/hailo-rpi5-examples
