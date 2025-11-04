@@ -57,6 +57,8 @@ class TelegramBase:
         self.watchdog_running = False
         self.watchdog_interval = 300  # Controlla ogni 5 minuti
         self.heartbeat_timeout = 900  # 15 minuti senza heartbeat = problema
+        self.connection_failures = 0  # Contatore fallimenti consecutivi
+        self.max_connection_failures = 3  # Riavvia dopo 3 fallimenti consecutivi
 
         logger.info("Initializing Telegram base handler...")
     
@@ -109,13 +111,22 @@ class TelegramBase:
                     logger.error(f"Watchdog: Nessun heartbeat da {time_since_heartbeat:.0f}s - Bot potrebbe essere disconnesso")
                     # Tenta di riavviare il bot
                     self._restart_bot()
+                    self.connection_failures = 0  # Reset contatore dopo riavvio
                 else:
                     # Tenta un ping per verificare la connessione
                     if not self._check_connection():
-                        logger.warning("Watchdog: Controllo connessione fallito")
-                        # Dopo alcuni fallimenti consecutivi, riavvia
-                        self._restart_bot()
+                        self.connection_failures += 1
+                        logger.warning(f"Watchdog: Controllo connessione fallito ({self.connection_failures}/{self.max_connection_failures})")
+                        # Riavvia solo dopo N fallimenti consecutivi
+                        if self.connection_failures >= self.max_connection_failures:
+                            logger.error(f"Watchdog: Troppi fallimenti consecutivi, riavvio bot")
+                            self._restart_bot()
+                            self.connection_failures = 0
                     else:
+                        # Reset contatore se connessione OK
+                        if self.connection_failures > 0:
+                            logger.info(f"Watchdog: Connessione ripristinata dopo {self.connection_failures} fallimenti")
+                        self.connection_failures = 0
                         logger.debug(f"Watchdog: Connessione OK (ultimo heartbeat: {time_since_heartbeat:.0f}s fa)")
 
             except Exception as e:

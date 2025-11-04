@@ -84,7 +84,8 @@ class WindowController:
             logger.info("Entering manual mode")
 
         # Se lo stato richiesto è uguale a quello attuale, non fare nulla
-        if should_be_open == self.is_window_open:
+        # TRANNE se è un comando manuale (che deve sempre eseguire)
+        if should_be_open == self.is_window_open and not manual:
             logger.info(f"Window is already {'open' if should_be_open else 'closed'}")
             return False
 
@@ -141,7 +142,8 @@ class WindowController:
             logger.info("Entering manual mode")
 
         # Se lo stato richiesto è uguale a quello attuale, non fare nulla
-        if should_be_locked == self.is_window_locked:
+        # TRANNE se è un comando manuale (che deve sempre eseguire)
+        if should_be_locked == self.is_window_locked and not manual:
             logger.info(f"Lock is already {'locked' if should_be_locked else 'unlocked'}")
             return False
 
