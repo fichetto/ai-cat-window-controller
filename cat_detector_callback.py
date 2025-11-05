@@ -153,7 +153,7 @@ class HeadlessCatDetectorCallback(app_callback_class):
             cat_present_time = current_time - self.last_cat_time
             if cat_present_time >= self.required_detection_time:
                 if self.window_controller.set_window_position(True, manual=False):
-                    message = f"Gatto presente da {cat_present_time.seconds}s con confidenza {max_confidence:.2f}"
+                    message = f"Gatto all'interno, apro la finestra"
                     logger.info(f"Opening window - {message}")
                     if self.telegram:
                         self.telegram.send_window_status(True, message)

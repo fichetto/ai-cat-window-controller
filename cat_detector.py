@@ -361,12 +361,12 @@ class CatDetectorApp:
             if cat_present_time >= self.required_detection_time:
                 # Apri la finestra se non è già aperta
                 if self.window_controller.set_window_position(True, manual=False):
-                    message = f"Gatto presente da {cat_present_time.seconds}s con confidenza {max_confidence:.2f}"
+                    message = f"Gatto all'interno, apro la finestra"
                     logger.info(f"Opening window - {message}")
-                    
+
                     # Registra l'apertura della finestra nelle statistiche
                     self.system_monitor.record_window_change(True)
-                    
+
                     # Notifica Telegram
                     if self.telegram:
                         self.telegram.send_window_status(True, message)
