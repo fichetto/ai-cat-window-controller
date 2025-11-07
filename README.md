@@ -102,10 +102,23 @@ The system can be configured to detect cats in specific areas:
 
 ### Start the System
 
+**IMPORTANT: The system starts automatically at boot via cron job**
+
+The system uses:
+- **Cron job**: `@reboot /home/pi/start-cat-window.sh`
+- **Startup script**: `/home/pi/start-cat-window.sh`
+- **Main application**: `headless_detection.py` (launched by startup script)
+
+To start manually:
 ```bash
 cd /home/pi/hailo-rpi5-examples
 source venv_hailo_rpi5_examples/bin/activate
 python basic_pipelines/headless_detection.py --input /dev/video0
+```
+
+Or use the startup script:
+```bash
+/home/pi/start-cat-window.sh
 ```
 
 ### Telegram Bot Commands
