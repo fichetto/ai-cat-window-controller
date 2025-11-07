@@ -12,7 +12,7 @@ import cv2
 import hailo
 import logging
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 from hailo_rpi_common import (
     get_caps_from_pad,
     get_numpy_from_buffer,
@@ -171,7 +171,20 @@ def app_callback(pad, info, user_data):
     if buffer is None:
         return Gst.PadProbeReturn.OK
 
+    # Frame counter per debug
+    if not hasattr(app_callback, 'frame_count'):
+        app_callback.frame_count = 0
+        app_callback.last_log_time = datetime.now()
+
+    app_callback.frame_count += 1
     current_time = datetime.now()
+
+    # Log ogni 100 frames (~3 secondi a 30fps)
+    if app_callback.frame_count % 100 == 0:
+        elapsed = (current_time - app_callback.last_log_time).total_seconds()
+        fps = 100 / elapsed if elapsed > 0 else 0
+        logger.info(f"Processing frame {app_callback.frame_count} (FPS: {fps:.1f})")
+        app_callback.last_log_time = current_time
     format, width, height = get_caps_from_pad(pad)
     
     frame = None
@@ -181,32 +194,88 @@ def app_callback(pad, info, user_data):
     roi = hailo.get_roi_from_buffer(buffer)
     detections = roi.get_objects_typed(hailo.HAILO_DETECTION)
 
-    # Rilevamento gatti con soglia adattiva
-    cat_detected = False
-    max_confidence = 0.0
+    # Debug: log tutte le detection ogni 300 frames
+    if app_callback.frame_count % 300 == 0 and len(detections) > 0:
+        logger.info(f"Total detections: {len(detections)}, Labels: {[d.get_label() for d in detections]}")
+
+    # Rilevamento gatti con soglia adattiva e raccolta informazioni posizione
+    cats_info = []  # Lista di tutti i gatti rilevati con info posizione
     current_threshold = user_data.get_current_confidence_threshold()
 
     for detection in detections:
         if detection.get_label() == "cat":
             confidence = detection.get_confidence()
             if confidence >= current_threshold:
-                cat_detected = True
-                max_confidence = max(max_confidence, confidence)
+                # Estrai coordinate bbox
+                bbox = detection.get_bbox()
+                xmin = float(bbox.xmin())
+                xmax = float(bbox.xmax())
+                center_x = (xmin + xmax) / 2
 
-    # Aggiorna il filtro temporale e ottieni lo stato filtrato
-    filtered_cat_present = user_data.update_detection_filter(cat_detected, current_time)
+                # Classifica posizione: sinistra (0-0.5) o destra (0.5-1.0)
+                is_left = center_x < 0.5
 
-    # Gestione della logica di rilevamento e controllo finestra
-    user_data.process_cat_detection(frame, max_confidence, filtered_cat_present, current_time)
+                cats_info.append({
+                    'confidence': confidence,
+                    'center_x': center_x,
+                    'is_left': is_left,
+                    'xmin': xmin,
+                    'xmax': xmax
+                })
 
-    # Gestione cattura immagini e invio Telegram
-    if frame is not None and cat_detected and max_confidence > 0:
+    # Determina stato basato su TUTTI i gatti rilevati
+    cat_detected = len(cats_info) > 0
+    cat_left = any(cat['is_left'] for cat in cats_info)
+    cat_right = any(not cat['is_left'] for cat in cats_info)
+    total_cats = len(cats_info)
+
+    # Trova il gatto con confidence maggiore per foto
+    max_confidence = max((cat['confidence'] for cat in cats_info), default=0.0)
+    best_cat = max(cats_info, key=lambda c: c['confidence']) if cats_info else None
+
+    # Aggiorna filtro temporale per LEFT: mantiene persistenza ignorando scomparse < 5 secondi
+    # Questo risolve il problema di frame mancanti o detection intermittenti
+    filtered_cat_left = user_data.update_detection_filter(cat_left, current_time)
+
+    # Traccia ultima volta che abbiamo visto un gatto a DESTRA
+    if cat_right:
+        user_data.last_right_detection_time = current_time
+
+    # Calcola quanto tempo è passato dall'ultima rilevazione a destra
+    time_since_right = (current_time - user_data.last_right_detection_time) if user_data.last_right_detection_time else timedelta(seconds=999)
+    no_recent_right = time_since_right > timedelta(seconds=5)
+
+    # Condizione per apertura: gatto a sinistra PERSISTENTE (negli ultimi 5 sec)
+    # E nessun gatto a destra negli ultimi 5 secondi
+    should_open_window = filtered_cat_left and no_recent_right
+
+    # Gestione controllo finestra con la nuova logica
+    user_data.process_cat_detection(frame, max_confidence, should_open_window, current_time, best_cat)
+
+    # Gestione cattura immagini: SEMPRE quando rileva gatti (sinistra O destra)
+    if frame is not None and cat_detected and best_cat:
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         saved_path = user_data.save_cat_image(frame_bgr, max_confidence)
 
-        # Se l'immagine è stata salvata e abbiamo Telegram configurato, inviala
-        if saved_path and hasattr(user_data, 'telegram') and user_data.telegram:
-            user_data.telegram.send_photo(saved_path)
+        # Invia foto con info posizione
+        if saved_path:
+            logger.info(f"Photo saved: {saved_path}")
+            if hasattr(user_data, 'telegram') and user_data.telegram:
+                # Crea caption con informazioni
+                position_pct = best_cat['center_x'] * 100
+                position_text = f"SINISTRA ({position_pct:.1f}%)" if best_cat['is_left'] else f"DESTRA ({position_pct:.1f}%)"
+
+                caption = f"🐱 Gatto rilevato\n"
+                caption += f"• Confidenza: {best_cat['confidence']:.2f}\n"
+                caption += f"• Posizione: {position_text}\n"
+                caption += f"• Gatti totali: {total_cats}"
+
+                user_data.telegram.send_photo(saved_path, caption=caption)
+                logger.info(f"Photo sent to Telegram with caption")
+            else:
+                logger.warning("Telegram handler not available")
+        else:
+            logger.info(f"Photo not saved (cooldown or low confidence: {max_confidence:.2f})")
 
     return Gst.PadProbeReturn.OK
 

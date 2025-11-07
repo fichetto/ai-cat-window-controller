@@ -40,13 +40,14 @@ class HeadlessCatDetectorCallback(app_callback_class):
         # Filtro rilevazioni con buffer più lungo per finestra aperta
         self.detection_filter_window = timedelta(seconds=5)
         self.recent_detections = []
+        self.last_right_detection_time = None  # Traccia ultima rilevazione a destra
 
         # Configurazione salvataggio immagini
         self.save_dir = "detected_cats"
         self.ensure_save_directory()
         self.last_capture_time = None
         self.capture_cooldown = timedelta(seconds=30)
-        self.capture_confidence_threshold = 0.8
+        self.capture_confidence_threshold = 0.6  # Abbassata per catturare più foto
 
         logger.info("Headless Cat Detector Callback initialized with adaptive thresholds")
 
@@ -127,15 +128,16 @@ class HeadlessCatDetectorCallback(app_callback_class):
 
         return len(self.recent_detections) > 0
 
-    def process_cat_detection(self, frame, max_confidence, filtered_cat_present, current_time):
+    def process_cat_detection(self, frame, max_confidence, should_open_window, current_time, best_cat=None):
         """
         Elabora il rilevamento del gatto e gestisce lo stato della finestra.
-        
+
         Args:
             frame (numpy.ndarray): Frame video corrente
             max_confidence (float): Massima confidenza rilevata nel frame
-            filtered_cat_present (bool): Indica se il gatto è presente dopo il filtraggio
+            should_open_window (bool): Se True, aprire la finestra (gatto a sinistra, solo uno)
             current_time (datetime): Timestamp corrente
+            best_cat (dict): Info sul gatto con confidence maggiore (opzionale)
         """
         # Verifica se il controllo automatico è abilitato
         if not self.window_controller.auto_control_enabled():
@@ -143,32 +145,39 @@ class HeadlessCatDetectorCallback(app_callback_class):
 
         current_threshold = self.get_current_confidence_threshold()
 
-        if filtered_cat_present:
+        if should_open_window:
             if self.last_cat_time is None:
                 self.last_cat_time = current_time
-                logger.info(f"Cat detected with confidence {max_confidence:.2f} " +
+                logger.info(f"Cat detected (LEFT, single) with confidence {max_confidence:.2f} " +
                           f"(threshold: {current_threshold:.2f})")
             self.last_no_cat_time = None
-            
+
             cat_present_time = current_time - self.last_cat_time
             if cat_present_time >= self.required_detection_time:
                 if self.window_controller.set_window_position(True, manual=False):
-                    message = "🐱 Gatto all'interno, apro la finestra"
+                    # Crea messaggio con info posizione
+                    message = "🐱 Gatto a sinistra (solo), apro la finestra"
+                    if best_cat:
+                        position_pct = best_cat['center_x'] * 100
+                        message += f"\n• Posizione: {position_pct:.1f}%"
+                        message += f"\n• Confidenza: {best_cat['confidence']:.2f}"
+
                     logger.info(f"Opening window - {message}")
                     if self.telegram:
                         self.telegram.send_window_status(True, message)
         else:
+            # Nessun gatto a sinistra (o multipli gatti) - chiudi finestra
             if self.last_no_cat_time is None:
                 self.last_no_cat_time = current_time
-                logger.info("Cat no longer detected " +
+                logger.info("No cat LEFT detected (or multiple cats) - starting close timer " +
                            f"(using threshold: {current_threshold:.2f})")
             self.last_cat_time = None
-            
+
             if self.last_no_cat_time is not None:
                 cat_absent_time = current_time - self.last_no_cat_time
                 if cat_absent_time >= self.required_no_detection_time:
                     if self.window_controller.set_window_position(False):
-                        message = f"Gatto assente da {cat_absent_time.seconds}s"
+                        message = f"Nessun gatto a sinistra da {cat_absent_time.seconds}s, chiudo finestra"
                         logger.info(f"Closing window - {message}")
                         if self.telegram:
                             self.telegram.send_window_status(False, message)
