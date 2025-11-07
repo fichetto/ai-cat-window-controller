@@ -185,7 +185,7 @@ def app_callback(pad, info, user_data):
     cat_detected = False
     max_confidence = 0.0
     current_threshold = user_data.get_current_confidence_threshold()
-    
+
     for detection in detections:
         if detection.get_label() == "cat":
             confidence = detection.get_confidence()
@@ -203,10 +203,10 @@ def app_callback(pad, info, user_data):
     if frame is not None and cat_detected and max_confidence > 0:
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         saved_path = user_data.save_cat_image(frame_bgr, max_confidence)
-        
+
         # Se l'immagine è stata salvata e abbiamo Telegram configurato, inviala
         if saved_path and hasattr(user_data, 'telegram') and user_data.telegram:
-            user_data.telegram.send_photo(saved_path, max_confidence)
+            user_data.telegram.send_photo(saved_path)
 
     return Gst.PadProbeReturn.OK
 

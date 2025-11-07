@@ -88,6 +88,9 @@ class CatDetectorApp:
         self.running = False
         self.error_count = 0
         self.last_error_time = None
+
+        # Debug info per coordinate bbox
+        self.last_bbox_debug = None
         
         # Inizializza i componenti
         logger.info("Initializing system components...")
@@ -254,10 +257,24 @@ class CatDetectorApp:
 
                         # Verifica se il gatto è nella ROI definita (per controllo finestra)
                         bbox = detection.get_bbox()
-                        # Ottieni i valori numerici dalle proprietà invece di sommare i metodi
-                        center_x = (float(bbox.xmin) + float(bbox.xmax)) / 2
+                        # bbox.xmin e bbox.xmax sono già normalizzati (0.0-1.0) da Hailo
+                        xmin = float(bbox.xmin)
+                        xmax = float(bbox.xmax)
+                        center_x = (xmin + xmax) / 2
+
+                        # Salva info debug per messaggio Telegram
+                        self.last_bbox_debug = {
+                            'xmin': xmin,
+                            'xmax': xmax,
+                            'center_x': center_x,
+                            'left_boundary': self.left_boundary,
+                            'right_boundary': self.right_boundary,
+                            'in_roi': self.is_within_roi(center_x),
+                            'confidence': confidence
+                        }
+
                         # Se la ROI è attiva, verifica che il centro del gatto sia entro i confini
-                        if self.is_within_roi(center_x, width):
+                        if self.is_within_roi(center_x):
                             cat_detected_in_roi = True
                             max_confidence = max(max_confidence, confidence)
 
@@ -291,22 +308,21 @@ class CatDetectorApp:
             return self.min_confidence * 0.8  # Riduzione del 20%
         return self.min_confidence
     
-    def is_within_roi(self, x_pos, width):
+    def is_within_roi(self, x_pos):
         """
         Verifica se un punto è entro la ROI definita.
-        
+
         Args:
-            x_pos: Posizione x del punto
-            width: Larghezza totale dell'immagine
-            
+            x_pos: Posizione x del punto (già normalizzata 0.0-1.0)
+
         Returns:
             bool: True se il punto è entro la ROI, False altrimenti
         """
-        # Normalizza la posizione x
-        normalized_x = x_pos / width
-        
+        # x_pos è già normalizzato da Hailo (0.0-1.0)
+        # NON dividere per width altrimenti si normalizza due volte!
+
         # Verifica se è entro i confini
-        return self.left_boundary <= normalized_x <= self.right_boundary
+        return self.left_boundary <= x_pos <= self.right_boundary
     
     def update_detection_filter(self, cat_detected, current_time):
         """
@@ -361,7 +377,29 @@ class CatDetectorApp:
             if cat_present_time >= self.required_detection_time:
                 # Apri la finestra se non è già aperta
                 if self.window_controller.set_window_position(True, manual=False):
-                    message = f"Gatto all'interno, apro la finestra"
+                    # Crea messaggio con debug info
+                    message = "🐱 Gatto all'interno, apro la finestra\n\n"
+
+                    if self.last_bbox_debug:
+                        d = self.last_bbox_debug
+                        message += f"📍 DEBUG COORDINATE:\n"
+                        message += f"• bbox.xmin: {d['xmin']:.3f}\n"
+                        message += f"• bbox.xmax: {d['xmax']:.3f}\n"
+                        message += f"• center_x: {d['center_x']:.3f}\n"
+                        message += f"• confidence: {d['confidence']:.2f}\n\n"
+                        message += f"🎯 ROI BOUNDARIES:\n"
+                        message += f"• left: {d['left_boundary']:.3f}\n"
+                        message += f"• right: {d['right_boundary']:.3f}\n"
+                        message += f"• in_roi: {'✓ SÌ' if d['in_roi'] else '✗ NO'}\n\n"
+
+                        # Calcola posizione percentuale
+                        pos_percent = d['center_x'] * 100
+                        if d['center_x'] < 0.5:
+                            position = f"SINISTRA ({pos_percent:.1f}%)"
+                        else:
+                            position = f"DESTRA ({pos_percent:.1f}%)"
+                        message += f"📊 Posizione gatto: {position}"
+
                     logger.info(f"Opening window - {message}")
 
                     # Registra l'apertura della finestra nelle statistiche

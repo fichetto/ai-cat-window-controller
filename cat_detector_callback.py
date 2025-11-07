@@ -23,20 +23,20 @@ class HeadlessCatDetectorCallback(app_callback_class):
         """Inizializza il detector con configurazione predefinita."""
         super().__init__()
         self.window_controller = WindowController()
-        
+
         # Il gestore Telegram verrà impostato dall'applicazione principale
         self.telegram = None
-        
+
         # Configurazione soglie di confidenza
         self.min_confidence_closed = 0.7  # Soglia quando finestra chiusa
         self.min_confidence_open = 0.5    # Soglia ridotta quando finestra aperta
-        
+
         # Parametri temporali
         self.last_cat_time = None
         self.last_no_cat_time = None
         self.required_detection_time = timedelta(seconds=10)
         self.required_no_detection_time = timedelta(seconds=3)
-        
+
         # Filtro rilevazioni con buffer più lungo per finestra aperta
         self.detection_filter_window = timedelta(seconds=5)
         self.recent_detections = []
@@ -47,7 +47,7 @@ class HeadlessCatDetectorCallback(app_callback_class):
         self.last_capture_time = None
         self.capture_cooldown = timedelta(seconds=30)
         self.capture_confidence_threshold = 0.8
-        
+
         logger.info("Headless Cat Detector Callback initialized with adaptive thresholds")
 
     def ensure_save_directory(self):
@@ -112,19 +112,19 @@ class HeadlessCatDetectorCallback(app_callback_class):
     def update_detection_filter(self, cat_detected, current_time):
         """
         Aggiorna il filtro temporale delle rilevazioni.
-        
+
         Args:
             cat_detected (bool): Indica se un gatto è stato rilevato nel frame corrente
             current_time (datetime): Timestamp corrente
-            
+
         Returns:
             bool: True se il gatto è considerato presente dopo il filtraggio
         """
-        self.recent_detections = [t for t in self.recent_detections 
+        self.recent_detections = [t for t in self.recent_detections
                                 if current_time - t < self.detection_filter_window]
         if cat_detected:
             self.recent_detections.append(current_time)
-        
+
         return len(self.recent_detections) > 0
 
     def process_cat_detection(self, frame, max_confidence, filtered_cat_present, current_time):
@@ -153,7 +153,7 @@ class HeadlessCatDetectorCallback(app_callback_class):
             cat_present_time = current_time - self.last_cat_time
             if cat_present_time >= self.required_detection_time:
                 if self.window_controller.set_window_position(True, manual=False):
-                    message = f"Gatto all'interno, apro la finestra"
+                    message = "🐱 Gatto all'interno, apro la finestra"
                     logger.info(f"Opening window - {message}")
                     if self.telegram:
                         self.telegram.send_window_status(True, message)

@@ -86,7 +86,7 @@ class WindowController:
         # Se lo stato richiesto è uguale a quello attuale, non fare nulla
         # TRANNE se è un comando manuale (che deve sempre eseguire)
         if should_be_open == self.is_window_open and not manual:
-            logger.info(f"Window is already {'open' if should_be_open else 'closed'}")
+            logger.debug(f"Window is already {'open' if should_be_open else 'closed'}")
             return False
 
         # Esegui il comando appropriato

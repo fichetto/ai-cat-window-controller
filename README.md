@@ -5,7 +5,7 @@ An intelligent cat detection system that automatically controls a motorized wind
 ## 🌟 Features
 
 - **Smart Cat Detection**: Uses Hailo AI accelerator for real-time cat detection
-- **Position-Based Control**: Opens window only when cat is detected in specific area (left half)
+- **Automatic Window Control**: Opens window when cat is detected
 - **Telegram Integration**:
   - Real-time notifications with photos
   - Remote window control
@@ -17,7 +17,7 @@ An intelligent cat detection system that automatically controls a motorized wind
   - Network error handling with exponential backoff
 - **Advanced Features**:
   - Window lock/unlock mechanism
-  - Configurable detection zones
+  - Adaptive confidence thresholds
   - Image capture with cooldown
   - Manual/automatic mode switching
 
@@ -83,20 +83,12 @@ WINDOW_CONFIG = {
 
 # Detection Configuration
 DETECTION_CONFIG = {
-    'min_confidence': 0.7,              # Minimum detection confidence
+    'min_confidence_closed': 0.7,       # Confidence when window closed
+    'min_confidence_open': 0.5,         # Lower threshold when open
     'required_detection_time': 10,      # Seconds before opening
     'required_no_detection_time': 3,    # Seconds before closing
-    'left_boundary': 0.0,               # Left boundary (0% = left edge)
-    'right_boundary': 0.5,              # Right boundary (50% = middle)
 }
 ```
-
-### Detection Zone
-
-The system can be configured to detect cats in specific areas:
-- `left_boundary: 0.0, right_boundary: 0.5` - Left half only (default)
-- `left_boundary: 0.0, right_boundary: 1.0` - Full frame
-- `left_boundary: 0.3, right_boundary: 0.7` - Center area only
 
 ## 🎮 Usage
 
@@ -148,31 +140,65 @@ Commands:
 
 ## 🏗️ Architecture
 
-### Main Components
+### Main Components (Current System)
+
+The system currently in production uses these files:
 
 ```
 basic_pipelines/
-├── cat_detector.py           # Main detection application
-├── cat_config.py             # Configuration file
-├── cat_window.py             # Window control script
-├── window_controller.py      # Window controller class
-├── telegram_base.py          # Telegram bot base with watchdog
-├── telegram_handler.py       # Telegram message handler
-├── telegram_commands.py      # Bot command handlers
-├── telegram_notifications.py # Notification system
-├── file_manager.py           # Image and file management
-├── system_monitor.py         # System monitoring
-└── headless_detection.py     # Headless detection pipeline
+├── headless_detection.py      # ⭐ Main entry point (CURRENT)
+├── cat_detector_callback.py   # Detection logic and window control
+├── cat_config.py              # Configuration file
+├── cat_window.py              # CLI tool for manual window control
+├── window_controller.py       # Window/lock servo controller
+├── telegram_base.py           # Telegram bot base with watchdog
+├── telegram_handler.py        # Telegram message handler
+├── telegram_commands.py       # Bot command handlers
+├── telegram_notifications.py  # Notification system
+└── backup_unused/             # Alternative implementations (not used)
+    ├── cat_detector.py        # Alternative main with ROI detection
+    ├── file_manager.py        # File management (alternative system)
+    ├── system_monitor.py      # System monitoring (alternative system)
+    └── README_BACKUP.md       # Documentation for backup files
+```
+
+**Note**: The system is launched by `/home/pi/start-cat-window.sh` via cron `@reboot`.
+
+### System Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                  headless_detection.py                   │
+│                    (Main Process)                        │
+└───────────────┬─────────────────────────┬────────────────┘
+                │                         │
+        ┌───────▼─────────┐      ┌────────▼─────────┐
+        │ cat_detector_   │      │  telegram_       │
+        │   callback.py   │      │  handler.py      │
+        │                 │      │                  │
+        │ • Detection     │      │ • Bot commands   │
+        │ • Time filter   │      │ • Notifications  │
+        │ • Image capture │      │ • Watchdog       │
+        └────────┬────────┘      └──────────────────┘
+                 │
+        ┌────────▼─────────┐
+        │  window_         │
+        │  controller.py   │
+        │                  │
+        │ • Servo control  │
+        │ • Lock control   │
+        │ • State mgmt     │
+        └──────────────────┘
 ```
 
 ### Detection Flow
 
 ```
-Camera → Hailo AI → Cat Detection → Position Check → Time Filter → Window Control
-                                                    ↓
-                                            Telegram Notification
-                                                    ↓
-                                              Image Capture
+Camera → GStreamer → Hailo AI → Cat Detection → Time Filter → Window Control
+                                      ↓                            ↓
+                              Image Capture                 Telegram Notify
+                                      ↓
+                               Telegram Photo
 ```
 
 ## 🔧 Advanced Features
@@ -195,10 +221,11 @@ If Arduino connection is lost, the system will:
 
 ### Detection Logic
 
-- **Window Opens**: Cat detected in zone for 10+ seconds
+- **Window Opens**: Cat detected continuously for 10+ seconds
 - **Window Closes**: No cat detected for 3+ seconds
-- **Images Captured**: All cats detected (any position)
-- **Cooldown**: 30 seconds between captures
+- **Adaptive Thresholds**: Lower confidence when window open (reduces false negatives)
+- **Images Captured**: All cats detected above threshold
+- **Cooldown**: 30 seconds between photo captures
 
 ## 📊 Monitoring
 
