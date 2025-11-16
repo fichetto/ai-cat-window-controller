@@ -205,11 +205,31 @@ Camera → GStreamer → Hailo AI → Cat Detection → Time Filter → Window C
 
 ### Watchdog System
 
-The bot includes an intelligent watchdog that:
-- Monitors connection health every 5 minutes
-- Auto-restarts on disconnect (15-minute timeout)
-- Updates heartbeat on successful operations
-- Logs connection issues for debugging
+**Multi-Layer Protection Against System Freeze:**
+
+1. **Hardware Watchdog** (BCM2835):
+   - Timeout: 10 seconds
+   - Automatically resets Raspberry Pi if kernel hangs
+   - Configured via `/etc/watchdog.conf`
+
+2. **Kernel Hung Task Detection**:
+   - Detects tasks blocked for >120 seconds
+   - Triggers kernel panic → automatic reboot
+   - Configured via `/etc/sysctl.d/99-watchdog-panic.conf`
+
+3. **Hailo Health Monitor**:
+   - Runs every 5 minutes via cron
+   - Logs temperature, load, detection process status
+   - Log file: `/var/log/hailo-monitor.log`
+   - Alerts if temperature >80°C
+
+4. **Telegram Bot Watchdog**:
+   - Monitors connection health every 5 minutes
+   - Auto-restarts on disconnect (15-minute timeout)
+   - Updates heartbeat on successful operations
+   - Logs connection issues for debugging
+
+**Note**: These protections prevent Hailo driver freezes from permanently locking the system.
 
 ### USB Auto-Recovery
 
@@ -248,6 +268,9 @@ tail -f /tmp/cat_detector_output.log
 
 # Detection log
 tail -f basic_pipelines/cat_detector.log
+
+# Hailo health monitor
+tail -f /var/log/hailo-monitor.log
 ```
 
 ### Status Files
@@ -255,6 +278,20 @@ tail -f basic_pipelines/cat_detector.log
 - `cat_window_state.json` - Current window state
 - `cats_database.json` - Detected cats database
 - `system_stats.json` - System statistics
+
+### Hailo Health Monitoring
+
+Monitor Hailo module temperature and system health:
+```bash
+# Check current temperature
+cat /sys/class/hwmon/hwmon*/temp*_input | awk '{print $1/1000 "°C"}'
+
+# View health log
+tail -20 /var/log/hailo-monitor.log
+
+# Manual monitoring test
+/home/pi/hailo-monitor.sh
+```
 
 ## 🐛 Troubleshooting
 
@@ -280,6 +317,45 @@ grep "Watchdog" /tmp/cat_detector_output.log
 - Adjust `min_confidence` in `cat_config.py`
 - Check camera with: `v4l2-ctl --list-devices`
 - Verify Hailo model is loaded
+
+### System Freeze / Hailo Lockup
+
+If the system becomes completely unresponsive (SSH not working):
+
+**Cause**: Hailo PCIe driver can occasionally cause kernel deadlock
+
+**Protection Mechanisms** (automatically enabled):
+1. **Hardware watchdog**: Resets system after 10s of kernel hang
+2. **Hung task detector**: Triggers panic if tasks blocked >120s
+3. **Health monitor**: Logs Hailo temperature every 5 minutes
+
+**Check after reboot**:
+```bash
+# View last boot time
+uptime
+
+# Check Hailo health history
+tail -50 /var/log/hailo-monitor.log
+
+# Verify watchdog is running
+sudo systemctl status watchdog
+
+# Check kernel panic settings
+sysctl kernel.hung_task_panic kernel.panic
+```
+
+**Manual intervention** (if system is still responsive):
+```bash
+# Check Hailo temperature
+cat /sys/class/hwmon/hwmon*/temp*_input | awk '{print $1/1000 "°C"}'
+
+# Restart detection process
+sudo pkill -f headless_detection
+/home/pi/start-cat-window.sh
+
+# Force Hailo driver reload (last resort)
+sudo rmmod hailo_pci && sudo modprobe hailo_pci
+```
 
 ## 📦 Backup
 
