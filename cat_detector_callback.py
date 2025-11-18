@@ -28,8 +28,8 @@ class HeadlessCatDetectorCallback(app_callback_class):
         self.telegram = None
 
         # Configurazione soglie di confidenza
-        self.min_confidence_closed = 0.7  # Soglia quando finestra chiusa
-        self.min_confidence_open = 0.5    # Soglia ridotta quando finestra aperta
+        self.min_confidence_closed = 0.8  # Soglia quando finestra chiusa (alzata per ridurre falsi positivi)
+        self.min_confidence_open = 0.7    # Soglia ridotta quando finestra aperta
 
         # Parametri temporali
         self.last_cat_time = None
@@ -47,7 +47,7 @@ class HeadlessCatDetectorCallback(app_callback_class):
         self.ensure_save_directory()
         self.last_capture_time = None
         self.capture_cooldown = timedelta(seconds=30)
-        self.capture_confidence_threshold = 0.6  # Abbassata per catturare più foto
+        self.capture_confidence_threshold = 0.8  # Alzata per ridurre falsi positivi
 
         logger.info("Headless Cat Detector Callback initialized with adaptive thresholds")
 

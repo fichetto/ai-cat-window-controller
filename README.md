@@ -250,10 +250,10 @@ If Arduino connection is lost, the system will:
 - **Window Opens**: Cat detected on LEFT continuously for 10+ seconds AND no cats on right
 - **Window Closes**: No qualifying cat detected for 3+ seconds
 - **Adaptive Thresholds**:
-  - Closed window: 0.7 confidence
-  - Open window: 0.5 confidence (reduces false negatives)
+  - Closed window: 0.8 confidence (high to reduce false positives)
+  - Open window: 0.7 confidence (slightly lower when cat already detected)
 - **Photo Capture**:
-  - All cats detected (left OR right) above 0.6 confidence
+  - All cats detected (left OR right) above 0.8 confidence
   - Includes position data (center X coordinate 0-100%)
   - Cooldown: 30 seconds between captures
   - Caption: confidence, position (LEFT/RIGHT %), total cats count
