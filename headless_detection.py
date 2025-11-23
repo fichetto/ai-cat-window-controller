@@ -284,8 +284,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Headless Cat Detection System')
     parser.add_argument('--input', '-i', default='/dev/video0',
                       help='Input source (default: /dev/video0)')
-    parser.add_argument('--hef-path', default='../resources/yolov8m.hef',
-                       help='Path to HEF file')
+    parser.add_argument('--hef-path', default='../resources/yolov11m.hef',
+                       help='Path to HEF file (default: YOLO11m for better accuracy)')
     return parser.parse_args()
 
 def main():

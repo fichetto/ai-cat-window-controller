@@ -4,7 +4,7 @@ An intelligent cat detection system that automatically controls a motorized wind
 
 ## 🌟 Features
 
-- **Smart Cat Detection**: Uses Hailo AI accelerator for real-time cat detection
+- **Smart Cat Detection**: Uses Hailo AI accelerator with YOLO11m (2024) for highly accurate real-time cat detection
 - **Automatic Window Control**: Opens window when cat is detected
 - **Telegram Integration**:
   - Real-time notifications with photos
@@ -89,6 +89,21 @@ DETECTION_CONFIG = {
     'required_no_detection_time': 3,    # Seconds before closing
 }
 ```
+
+## 🤖 AI Model
+
+The system uses **YOLO11m** (November 2024) for object detection:
+- **Model**: YOLO11 Medium (33 MB HEF file)
+- **Accuracy**: High precision with minimal false positives
+- **Performance**: ~23 FPS on Raspberry Pi 5 with Hailo-8
+- **Version**: Compiled from Hailo Model Zoo v2.14.0
+
+**Alternative Models** (available in `resources/`):
+- `yolov11n.hef` (7 MB) - Faster but less accurate
+- `yolov11s.hef` (18 MB) - Balanced speed/accuracy
+- `yolov8m.hef` (27 MB) - Previous version (2023)
+
+To use a different model, modify the `--hef-path` argument in the startup script.
 
 ## 🎮 Usage
 
