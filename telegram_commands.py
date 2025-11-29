@@ -20,7 +20,8 @@ class TelegramCommands:
         """Registra i comandi disponibili nel menu del bot."""
         commands = [
             BotCommand("start", "Avvia il bot e mostra i comandi disponibili"),
-            BotCommand("apri", "Apre la finestra"),
+            BotCommand("apri", "Apre la finestra (passa a manuale)"),
+            BotCommand("faientrare", "Apre la finestra (mantiene modalità)"),
             BotCommand("chiudi", "Chiude la finestra"),
             BotCommand("status", "Mostra lo stato della finestra"),
             BotCommand("auto", "Attiva controllo automatico"),
@@ -40,6 +41,7 @@ class TelegramCommands:
         """Aggiunge gli handler per i comandi."""
         self.application.add_handler(CommandHandler("start", self._start_command))
         self.application.add_handler(CommandHandler("apri", self._open_command))
+        self.application.add_handler(CommandHandler("faientrare", self._let_in_command))
         self.application.add_handler(CommandHandler("chiudi", self._close_command))
         self.application.add_handler(CommandHandler("status", self._status_command))
         self.application.add_handler(CommandHandler("auto", self._auto_command))
@@ -53,7 +55,8 @@ class TelegramCommands:
         await update.message.reply_text(
             "⚠️ Comando non riconosciuto\n\n"
             "Comandi disponibili:\n"
-            "/apri - Apre la finestra\n"
+            "/apri - Apre la finestra (passa a manuale)\n"
+            "/faientrare - Apre per far entrare il gatto (mantiene modalità)\n"
             "/chiudi - Chiude la finestra\n"
             "/status - Stato della finestra\n"
             "/auto - Attiva controllo automatico\n"
@@ -68,7 +71,8 @@ class TelegramCommands:
         await update.message.reply_text(
             "👋 Ciao! Sono il bot di controllo della finestra per gatti.\n\n"
             "Comandi disponibili:\n"
-            "/apri - Apre la finestra\n"
+            "/apri - Apre la finestra (passa a manuale)\n"
+            "/faientrare - Apre per far entrare il gatto (mantiene modalità)\n"
             "/chiudi - Chiude la finestra\n"
             "/status - Stato della finestra\n"
             "/auto - Attiva controllo automatico\n"
@@ -89,6 +93,34 @@ class TelegramCommands:
             if self.window_controller.set_window_position(True, manual=True):
                 await update.message.reply_text("✅ Comando di apertura inviato!\nModalità manuale attivata")
                 logger.info("Window open command executed successfully")
+            else:
+                await update.message.reply_text("⚠️ La finestra è già aperta o in movimento")
+                logger.info("Window already open or moving")
+        except Exception as e:
+            error_msg = f"Errore durante l'apertura: {str(e)}"
+            await update.message.reply_text(f"❌ {error_msg}")
+            logger.error(error_msg)
+
+    async def _let_in_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce il comando /faientrare - apre senza cambiare modalità."""
+        logger.info("Let-in command received")
+        if not self.window_controller:
+            await update.message.reply_text("❌ Controller finestra non disponibile")
+            logger.error("Window controller not available")
+            return
+
+        try:
+            # Apre la finestra SENZA cambiare la modalità (manual=False)
+            # Se era in automatico, rimane automatico
+            # Se era in manuale, rimane manuale
+            current_mode = "automatica" if self.window_controller.auto_control_enabled() else "manuale"
+
+            if self.window_controller.set_window_position(True, manual=False):
+                await update.message.reply_text(
+                    f"✅ Finestra aperta per far entrare il gatto!\n"
+                    f"🔄 Modalità: {current_mode} (invariata)"
+                )
+                logger.info(f"Let-in command executed, mode unchanged: {current_mode}")
             else:
                 await update.message.reply_text("⚠️ La finestra è già aperta o in movimento")
                 logger.info("Window already open or moving")

@@ -252,26 +252,26 @@ def app_callback(pad, info, user_data):
     # Gestione controllo finestra con la nuova logica
     user_data.process_cat_detection(frame, max_confidence, should_open_window, current_time, best_cat)
 
-    # Gestione cattura immagini: SEMPRE quando rileva gatti (sinistra O destra)
-    if frame is not None and cat_detected and best_cat:
+    # Gestione cattura immagini: SOLO quando gatto a DESTRA (fuori, vuole entrare)
+    # Gatto a SINISTRA = dentro, finestra si apre automaticamente, no notifica
+    if frame is not None and cat_right and best_cat and not best_cat['is_left']:
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         saved_path = user_data.save_cat_image(frame_bgr, max_confidence)
 
-        # Invia foto con info posizione
+        # Invia foto con notifica - gatto è fuori e vuole entrare!
         if saved_path:
             logger.info(f"Photo saved: {saved_path}")
             if hasattr(user_data, 'telegram') and user_data.telegram:
                 # Crea caption con informazioni
                 position_pct = best_cat['center_x'] * 100
-                position_text = f"SINISTRA ({position_pct:.1f}%)" if best_cat['is_left'] else f"DESTRA ({position_pct:.1f}%)"
 
-                caption = f"🐱 Gatto rilevato\n"
+                caption = f"🐱 Gatto FUORI vuole entrare!\n"
+                caption += f"• Posizione: DESTRA ({position_pct:.1f}%)\n"
                 caption += f"• Confidenza: {best_cat['confidence']:.2f}\n"
-                caption += f"• Posizione: {position_text}\n"
-                caption += f"• Gatti totali: {total_cats}"
+                caption += f"• Usa /faientrare per aprire"
 
                 user_data.telegram.send_photo(saved_path, caption=caption)
-                logger.info(f"Photo sent to Telegram with caption")
+                logger.info(f"Photo sent to Telegram - cat outside wants to enter")
             else:
                 logger.warning("Telegram handler not available")
         else:

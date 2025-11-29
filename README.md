@@ -132,12 +132,14 @@ Or use the startup script:
 
 - `/start` - Initialize bot and get welcome message
 - `/status` - Get current window status
-- `/open` - Manually open window
-- `/close` - Manually close window
+- `/apri` - Open window (switches to manual mode)
+- `/faientrare` - Open window to let cat in (keeps current mode)
+- `/chiudi` - Close window
 - `/auto` - Enable automatic mode
-- `/manual` - Disable automatic mode
-- `/lock` - Lock the window
-- `/unlock` - Unlock the window
+- `/manuale` - Disable automatic mode
+- `/foto` - Request a photo from the system
+
+**Note**: When a cat is detected **outside** (right side), the bot sends a notification with the `/faientrare` command suggestion. This opens the window without changing the current mode.
 
 ### Manual Window Control (CLI)
 
@@ -267,11 +269,12 @@ If Arduino connection is lost, the system will:
 - **Adaptive Thresholds**:
   - Closed window: 0.8 confidence (high to reduce false positives)
   - Open window: 0.7 confidence (slightly lower when cat already detected)
-- **Photo Capture**:
-  - All cats detected (left OR right) above 0.8 confidence
-  - Includes position data (center X coordinate 0-100%)
+- **Photo & Notification**:
+  - Only when cat detected on RIGHT side (outside, wants to enter)
+  - Cat on LEFT = inside, window opens automatically, NO notification
+  - Confidence threshold: 0.8 minimum
   - Cooldown: 30 seconds between captures
-  - Caption: confidence, position (LEFT/RIGHT %), total cats count
+  - Caption includes: confidence, position, `/faientrare` command suggestion
 
 ## 📊 Monitoring
 
