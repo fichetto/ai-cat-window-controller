@@ -20,6 +20,8 @@ from hailo_rpi_common import (
 from cat_detector_callback import HeadlessCatDetectorCallback
 from window_controller import WindowController
 from telegram_handler import TelegramHandler
+from cat_feeding_manager import CatFeedingManager
+import telegram_commands
 
 # Configurazione logging
 logging.basicConfig(
@@ -40,7 +42,8 @@ class HeadlessDetectorApp:
         self.mainloop = None
         self.user_data = None
         self.telegram = None
-        
+        self.feeding_manager = None
+
         # Inizializza prima il controller della finestra
         logger.info("Initializing window controller...")
         self.window_controller = WindowController()
@@ -56,6 +59,28 @@ class HeadlessDetectorApp:
         except Exception as e:
             logger.error(f"Failed to initialize Telegram handler: {e}")
             self.telegram = None
+
+    def _initialize_feeding_manager(self):
+        """Inizializza il sistema di alimentazione gatti."""
+        try:
+            self.feeding_manager = CatFeedingManager()
+
+            # Imposta callback per Telegram
+            if self.telegram:
+                self.feeding_manager.set_telegram_callbacks(
+                    message_callback=self.telegram.send_message,
+                    photo_callback=self.telegram.send_photo
+                )
+
+            # Registra il feeding manager per i comandi Telegram
+            telegram_commands.set_feeding_manager(self.feeding_manager)
+
+            # Avvia il client MQTT
+            self.feeding_manager.start()
+            logger.info("Cat feeding manager initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize feeding manager: {e}")
+            self.feeding_manager = None
 
     def _initialize_detector(self):
         """Inizializza il rilevatore di gatti."""
@@ -137,30 +162,33 @@ class HeadlessDetectorApp:
         try:
             # Inizializza i componenti nell'ordine corretto
             self._initialize_telegram()
+            self._initialize_feeding_manager()
             self._initialize_detector()
-            
+
             self.pipeline = self.build_pipeline()
             self._setup_callback()
-            
+
             # Avvia il mainloop
             self.mainloop = GLib.MainLoop()
             self.pipeline.set_state(Gst.State.PLAYING)
             logger.info("Pipeline started successfully")
             self.mainloop.run()
-            
+
         except Exception as e:
             logger.error(f"Error starting application: {e}", exc_info=True)
             if self.telegram:
                 self.telegram.send_message(f"❌ Errore durante l'avvio: {str(e)}")
             self.stop()
             raise
-    
+
     def stop(self):
         """Ferma l'applicazione."""
         if self.pipeline:
             self.pipeline.set_state(Gst.State.NULL)
         if self.mainloop and self.mainloop.is_running():
             self.mainloop.quit()
+        if self.feeding_manager:
+            self.feeding_manager.stop()
         if self.telegram:
             self.telegram.send_message("🔴 Sistema di rilevamento gatti arrestato")
         logger.info("Application stopped")
