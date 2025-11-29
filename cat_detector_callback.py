@@ -49,6 +49,12 @@ class HeadlessCatDetectorCallback(app_callback_class):
         self.capture_cooldown = timedelta(seconds=30)
         self.capture_confidence_threshold = 0.8  # Alzata per ridurre falsi positivi
 
+        # Tracking movimento gatto (per rilevare entrata/uscita)
+        self.last_single_cat_position = None  # 'left' o 'right' - ultima posizione con 1 solo gatto
+        self.last_single_cat_time = None  # Quando è stata vista l'ultima posizione
+        self.window_opened_for_entry = False  # True se finestra aperta con /faientrare
+        self.window_opened_for_exit = False  # True se finestra aperta automaticamente (gatto dentro vuole uscire)
+
         logger.info("Headless Cat Detector Callback initialized with adaptive thresholds")
 
     def ensure_save_directory(self):
@@ -127,6 +133,64 @@ class HeadlessCatDetectorCallback(app_callback_class):
             self.recent_detections.append(current_time)
 
         return len(self.recent_detections) > 0
+
+    def track_cat_movement(self, total_cats, cat_position, current_time):
+        """
+        Traccia il movimento del gatto per rilevare entrata/uscita.
+
+        Args:
+            total_cats (int): Numero totale di gatti rilevati
+            cat_position (str): 'left' o 'right' - posizione del gatto (se singolo)
+            current_time (datetime): Timestamp corrente
+
+        Returns:
+            str or None: 'entered', 'exited', o None se nessun movimento rilevato
+        """
+        # Solo se c'è esattamente 1 gatto possiamo tracciare il movimento
+        if total_cats != 1:
+            # Reset tracking se non c'è un gatto singolo
+            if total_cats == 0:
+                # Nessun gatto - se la finestra era aperta e c'era un gatto prima,
+                # potrebbe essere passato (ma non possiamo essere sicuri della direzione)
+                pass
+            return None
+
+        # C'è esattamente 1 gatto
+        previous_position = self.last_single_cat_position
+        previous_time = self.last_single_cat_time
+
+        # Aggiorna la posizione corrente
+        self.last_single_cat_position = cat_position
+        self.last_single_cat_time = current_time
+
+        # Se non avevamo una posizione precedente, non possiamo rilevare movimento
+        if previous_position is None:
+            return None
+
+        # Verifica che il cambio sia recente (entro 10 secondi)
+        if previous_time and (current_time - previous_time) > timedelta(seconds=10):
+            # Troppo tempo passato, non è un movimento continuo
+            return None
+
+        # Rileva cambio di posizione
+        if previous_position != cat_position:
+            if previous_position == 'left' and cat_position == 'right':
+                # SINISTRA → DESTRA = Il gatto è USCITO
+                if self.window_controller.is_window_open:
+                    logger.info("🚪➡️ MOVIMENTO RILEVATO: Gatto passato da SINISTRA a DESTRA = USCITO!")
+                    if self.telegram:
+                        self.telegram.send_message("🐱➡️🚪 Gatto USCITO! (da sinistra a destra)")
+                    return 'exited'
+
+            elif previous_position == 'right' and cat_position == 'left':
+                # DESTRA → SINISTRA = Il gatto è ENTRATO
+                if self.window_controller.is_window_open:
+                    logger.info("🚪⬅️ MOVIMENTO RILEVATO: Gatto passato da DESTRA a SINISTRA = ENTRATO!")
+                    if self.telegram:
+                        self.telegram.send_message("🐱⬅️🏠 Gatto ENTRATO! (da destra a sinistra)")
+                    return 'entered'
+
+        return None
 
     def process_cat_detection(self, frame, max_confidence, should_open_window, current_time, best_cat=None):
         """

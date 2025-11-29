@@ -245,12 +245,22 @@ def app_callback(pad, info, user_data):
     time_since_right = (current_time - user_data.last_right_detection_time) if user_data.last_right_detection_time else timedelta(seconds=999)
     no_recent_right = time_since_right > timedelta(seconds=5)
 
-    # Condizione per apertura: gatto a sinistra PERSISTENTE (negli ultimi 5 sec)
+    # Condizione per apertura: gatto/i a sinistra PERSISTENTE (negli ultimi 5 sec)
     # E nessun gatto a destra negli ultimi 5 secondi
+    # NUOVA REGOLA: Apre se ci sono gatti a sinistra (anche multipli), NON apre se ci sono gatti a destra
     should_open_window = filtered_cat_left and no_recent_right
 
     # Gestione controllo finestra con la nuova logica
     user_data.process_cat_detection(frame, max_confidence, should_open_window, current_time, best_cat)
+
+    # Tracking movimento gatto (per rilevare entrata/uscita)
+    # Solo se c'è esattamente 1 gatto, determina la sua posizione
+    if total_cats == 1 and best_cat:
+        cat_position = 'left' if best_cat['is_left'] else 'right'
+        user_data.track_cat_movement(total_cats, cat_position, current_time)
+    else:
+        # Passa 0 o >1 gatti per resettare/ignorare il tracking
+        user_data.track_cat_movement(total_cats, None, current_time)
 
     # Gestione cattura immagini: SOLO quando gatto a DESTRA (fuori, vuole entrare)
     # Gatto a SINISTRA = dentro, finestra si apre automaticamente, no notifica
