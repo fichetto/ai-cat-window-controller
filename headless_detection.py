@@ -262,26 +262,22 @@ def app_callback(pad, info, user_data):
         # Passa 0 o >1 gatti per resettare/ignorare il tracking
         user_data.track_cat_movement(total_cats, None, current_time)
 
-    # Gestione cattura immagini: SOLO quando gatto a DESTRA (fuori, vuole entrare)
+    # Gestione cattura immagini: SOLO quando gatto a DESTRA (fuori)
     # Gatto a SINISTRA = dentro, finestra si apre automaticamente, no notifica
     if frame is not None and cat_right and best_cat and not best_cat['is_left']:
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         saved_path = user_data.save_cat_image(frame_bgr, max_confidence)
 
-        # Invia foto con notifica - gatto è fuori e vuole entrare!
+        # Invia foto con notifica - gatto è fuori
         if saved_path:
             logger.info(f"Photo saved: {saved_path}")
             if hasattr(user_data, 'telegram') and user_data.telegram:
-                # Crea caption con informazioni
-                position_pct = best_cat['center_x'] * 100
-
-                caption = f"🐱 Gatto FUORI vuole entrare!\n"
-                caption += f"• Posizione: DESTRA ({position_pct:.1f}%)\n"
-                caption += f"• Confidenza: {best_cat['confidence']:.2f}\n"
+                caption = f"🐱 Gatto presente fuori.\n"
+                caption += f"Il gatto potrebbe voler passare. Aprire finestra?\n"
                 caption += f"• Usa /faientrare per aprire"
 
                 user_data.telegram.send_photo(saved_path, caption=caption)
-                logger.info(f"Photo sent to Telegram - cat outside wants to enter")
+                logger.info(f"Photo sent to Telegram - cat detected outside")
             else:
                 logger.warning("Telegram handler not available")
         else:
