@@ -27,6 +27,7 @@ class WindowController:
         self.manual_mode = False  # Flag per modalità manuale
         self.is_window_open = False
         self.is_window_locked = True
+        self.last_let_in_time = None  # Timestamp ultimo /faientrare
         
         # Setup percorso script
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -223,11 +224,33 @@ class WindowController:
     def auto_control_enabled(self):
         """
         Verifica se il controllo automatico è abilitato.
-        
+
         Returns:
             bool: True se il controllo automatico è abilitato
         """
         return not self.manual_mode
+
+    def set_let_in_time(self):
+        """Imposta il timestamp di 'let-in' per estendere il tempo prima della chiusura."""
+        self.last_let_in_time = datetime.now()
+        logger.info("Let-in time set - close delay extended by 3 seconds")
+
+    def get_close_delay_extension(self):
+        """
+        Restituisce l'estensione del delay di chiusura dopo un 'let-in'.
+
+        Returns:
+            timedelta: Estensione del tempo (3 secondi se recente let-in, 0 altrimenti)
+        """
+        if self.last_let_in_time is None:
+            return timedelta(seconds=0)
+
+        # Se il let-in è avvenuto negli ultimi 30 secondi, estendi il tempo di chiusura
+        time_since_let_in = datetime.now() - self.last_let_in_time
+        if time_since_let_in < timedelta(seconds=30):
+            return timedelta(seconds=3)
+
+        return timedelta(seconds=0)
 
     def disable_auto_control(self):
         """Disabilita il controllo automatico."""

@@ -175,7 +175,9 @@ class HeadlessCatDetectorCallback(app_callback_class):
 
             if self.last_no_cat_time is not None:
                 cat_absent_time = current_time - self.last_no_cat_time
-                if cat_absent_time >= self.required_no_detection_time:
+                # Aggiungi estensione tempo chiusura dopo /faientrare (3 secondi extra)
+                close_delay = self.required_no_detection_time + self.window_controller.get_close_delay_extension()
+                if cat_absent_time >= close_delay:
                     if self.window_controller.set_window_position(False):
                         message = f"Nessun gatto a sinistra da {cat_absent_time.seconds}s, chiudo finestra"
                         logger.info(f"Closing window - {message}")

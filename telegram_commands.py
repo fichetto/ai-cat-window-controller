@@ -116,11 +116,14 @@ class TelegramCommands:
             current_mode = "automatica" if self.window_controller.auto_control_enabled() else "manuale"
 
             if self.window_controller.set_window_position(True, manual=False):
+                # Imposta il timestamp let-in per estendere il tempo di chiusura
+                self.window_controller.set_let_in_time()
                 await update.message.reply_text(
                     f"✅ Finestra aperta per far entrare il gatto!\n"
-                    f"🔄 Modalità: {current_mode} (invariata)"
+                    f"🔄 Modalità: {current_mode} (invariata)\n"
+                    f"⏱️ Chiusura ritardata di 3 secondi extra"
                 )
-                logger.info(f"Let-in command executed, mode unchanged: {current_mode}")
+                logger.info(f"Let-in command executed, mode unchanged: {current_mode}, close delay extended")
             else:
                 await update.message.reply_text("⚠️ La finestra è già aperta o in movimento")
                 logger.info("Window already open or moving")
