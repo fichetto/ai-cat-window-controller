@@ -7,6 +7,8 @@ import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib
 import os
+import sys
+import resource
 import numpy as np
 import cv2
 import hailo
@@ -30,9 +32,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Limite massimo di memoria (2GB) - se superato, il processo si riavvia
+MAX_MEMORY_MB = 2000
+MEMORY_CHECK_INTERVAL = 100  # Controlla ogni N frame
+
 class HeadlessDetectorApp:
     """Applicazione standalone per rilevamento gatti in modalità headless."""
-    
+
     def __init__(self, input_source, hef_path):
         """Inizializza l'applicazione."""
         Gst.init(None)
@@ -43,6 +49,7 @@ class HeadlessDetectorApp:
         self.user_data = None
         self.telegram = None
         self.feeding_manager = None
+        self.memory_check_counter = 0
 
         # Inizializza prima il controller della finestra
         logger.info("Initializing window controller...")
@@ -213,6 +220,17 @@ def app_callback(pad, info, user_data):
         fps = 100 / elapsed if elapsed > 0 else 0
         logger.info(f"Processing frame {app_callback.frame_count} (FPS: {fps:.1f})")
         app_callback.last_log_time = current_time
+
+        # Controllo memoria ogni 100 frame per prevenire OOM
+        mem_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        if mem_mb > MAX_MEMORY_MB:
+            logger.error(f"MEMORY LIMIT EXCEEDED: {mem_mb:.0f}MB > {MAX_MEMORY_MB}MB - Restarting...")
+            if hasattr(user_data, 'telegram') and user_data.telegram:
+                try:
+                    user_data.telegram.send_message(f"⚠️ Riavvio automatico: memoria {mem_mb:.0f}MB")
+                except:
+                    pass
+            os._exit(1)  # Exit per trigger restart da systemd o script
     format, width, height = get_caps_from_pad(pad)
     
     frame = None

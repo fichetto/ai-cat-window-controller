@@ -28,7 +28,8 @@ class WindowController:
         self.is_window_open = False
         self.is_window_locked = True
         self.last_let_in_time = None  # Timestamp ultimo /faientrare
-        
+        self.let_in_timer_reset_needed = False  # Flag per resettare il timer di chiusura
+
         # Setup percorso script
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.window_script = os.path.join(self.script_dir, "cat_window.py")
@@ -233,7 +234,8 @@ class WindowController:
     def set_let_in_time(self):
         """Imposta il timestamp di 'let-in' per estendere il tempo prima della chiusura."""
         self.last_let_in_time = datetime.now()
-        logger.info("Let-in time set - close delay extended by 3 seconds")
+        self.let_in_timer_reset_needed = True  # Flag per resettare il timer nel callback
+        logger.info("Let-in time set - close timer will be reset")
 
     def get_close_delay_extension(self):
         """

@@ -237,6 +237,12 @@ class HeadlessCatDetectorCallback(app_callback_class):
                            f"(using threshold: {current_threshold:.2f})")
             self.last_cat_time = None
 
+            # Controlla se è stato eseguito /faientrare - resetta il timer di chiusura
+            if self.window_controller.let_in_timer_reset_needed:
+                self.last_no_cat_time = current_time  # Resetta il timer
+                self.window_controller.let_in_timer_reset_needed = False
+                logger.info("Close timer reset due to /faientrare command")
+
             if self.last_no_cat_time is not None:
                 cat_absent_time = current_time - self.last_no_cat_time
                 # Aggiungi estensione tempo chiusura dopo /faientrare (3 secondi extra)
