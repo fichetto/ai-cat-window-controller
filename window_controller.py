@@ -3,6 +3,7 @@ Controller per la finestra motorizzata con serratura.
 """
 
 import os
+import sys
 import logging
 import subprocess
 from datetime import datetime, timedelta
@@ -16,12 +17,12 @@ class WindowController:
         self.OPEN_ANGLE = 120    # Angolo di apertura
         self.LOCK_CLOSED = 0     # Angolo serratura chiusa
         self.LOCK_OPEN = 90      # Angolo serratura aperta
-        
+
         self.current_angle = self.CLOSED_ANGLE
         self.target_angle = self.CLOSED_ANGLE
         self.current_lock_angle = self.LOCK_CLOSED
         self.target_lock_angle = self.LOCK_CLOSED
-        
+
         self.last_command_time = None
         self.command_cooldown = timedelta(seconds=5)
         self.manual_mode = False  # Flag per modalità manuale
@@ -30,9 +31,10 @@ class WindowController:
         self.last_let_in_time = None  # Timestamp ultimo /faientrare
         self.let_in_timer_reset_needed = False  # Flag per resettare il timer di chiusura
 
-        # Setup percorso script
+        # Setup percorso script - usa lo stesso Python del processo corrente
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.window_script = os.path.join(self.script_dir, "cat_window.py")
+        self.python_exe = sys.executable  # Usa il Python corrente (venv)
         logger.info(f"Window controller initialized with script at: {self.window_script}")
         logger.info(f"Window controller now supports lock functionality")
 
@@ -48,7 +50,7 @@ class WindowController:
             bool: True se il comando è riuscito, False altrimenti
         """
         try:
-            cmd_args = ['python3', self.window_script, command]
+            cmd_args = [self.python_exe, self.window_script, command]
             for arg in args:
                 cmd_args.append(str(arg))
                 

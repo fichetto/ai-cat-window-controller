@@ -3,10 +3,10 @@
 # Script di avvio per il sistema di controllo finestra gatti
 # Questo script è progettato per essere eseguito al boot via crontab
 
-# Ottieni la directory dello script
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
+# Path fissi - più affidabili dei path relativi
+PROJECT_DIR="/home/pi/hailo-rpi5-examples"
 PIPELINES_DIR="$PROJECT_DIR/basic_pipelines"
+SCRIPT_DIR="$PIPELINES_DIR/scripts"
 
 # Imposta il log file
 exec 1> >(logger -s -t $(basename $0)) 2>&1
