@@ -20,6 +20,23 @@ echo "PROJECT_DIR: $PROJECT_DIR"
 sleep 30
 echo "Attesa iniziale completata"
 
+# Attendi connessione internet (necessaria per Telegram)
+echo "Attesa connessione internet..."
+MAX_WAIT=120
+WAIT_COUNT=0
+while ! ping -c 1 -W 2 api.telegram.org > /dev/null 2>&1; do
+    WAIT_COUNT=$((WAIT_COUNT + 1))
+    if [ $WAIT_COUNT -gt $MAX_WAIT ]; then
+        echo "ATTENZIONE: Timeout attesa internet dopo ${MAX_WAIT}s - avvio comunque"
+        break
+    fi
+    echo "Attesa internet... ($WAIT_COUNT/$MAX_WAIT)"
+    sleep 1
+done
+if [ $WAIT_COUNT -le $MAX_WAIT ]; then
+    echo "Connessione internet OK"
+fi
+
 # Vai alla directory del progetto
 cd "$PROJECT_DIR" || { echo "Errore: impossibile accedere a $PROJECT_DIR"; exit 1; }
 echo "Directory progetto: $(pwd)"
