@@ -226,24 +226,32 @@ def app_callback(pad, info, user_data):
         # Controllo memoria ogni 100 frame per prevenire OOM
         mem_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
         if mem_mb > MAX_MEMORY_MB:
-            logger.error(f"MEMORY LIMIT EXCEEDED: {mem_mb:.0f}MB > {MAX_MEMORY_MB}MB - Restarting...")
-            if hasattr(user_data, 'telegram') and user_data.telegram:
-                try:
-                    user_data.telegram.send_message(f"⚠️ Riavvio automatico: memoria {mem_mb:.0f}MB")
-                except:
-                    pass
-            os._exit(1)  # Exit per trigger restart da systemd o script
+            # NON riavviare se la finestra è aperta
+            if hasattr(user_data, 'window_controller') and user_data.window_controller.is_window_open:
+                logger.warning(f"MEMORY LIMIT EXCEEDED: {mem_mb:.0f}MB but window is OPEN - waiting to restart")
+            else:
+                logger.error(f"MEMORY LIMIT EXCEEDED: {mem_mb:.0f}MB > {MAX_MEMORY_MB}MB - Restarting...")
+                if hasattr(user_data, 'telegram') and user_data.telegram:
+                    try:
+                        user_data.telegram.send_message(f"⚠️ Riavvio automatico: memoria {mem_mb:.0f}MB")
+                    except:
+                        pass
+                os._exit(1)  # Exit per trigger restart da systemd o script
 
         # Controllo uptime massimo (12 ore) per riavvio preventivo contro memory leak
         uptime_hours = (current_time - app_callback.start_time).total_seconds() / 3600
         if uptime_hours > 12:
-            logger.warning(f"MAX UPTIME REACHED: {uptime_hours:.1f}h - Preventive restart for memory leak")
-            if hasattr(user_data, 'telegram') and user_data.telegram:
-                try:
-                    user_data.telegram.send_message(f"🔄 Riavvio preventivo dopo {uptime_hours:.1f}h di uptime")
-                except:
-                    pass
-            os._exit(0)  # Exit pulito per restart
+            # NON riavviare se la finestra è aperta
+            if hasattr(user_data, 'window_controller') and user_data.window_controller.is_window_open:
+                logger.warning(f"MAX UPTIME REACHED: {uptime_hours:.1f}h but window is OPEN - waiting to restart")
+            else:
+                logger.warning(f"MAX UPTIME REACHED: {uptime_hours:.1f}h - Preventive restart for memory leak")
+                if hasattr(user_data, 'telegram') and user_data.telegram:
+                    try:
+                        user_data.telegram.send_message(f"🔄 Riavvio preventivo dopo {uptime_hours:.1f}h di uptime")
+                    except:
+                        pass
+                os._exit(0)  # Exit pulito per restart
     format, width, height = get_caps_from_pad(pad)
     
     frame = None
