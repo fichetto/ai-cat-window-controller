@@ -1,0 +1,55 @@
+{
+  "folders": [
+    {
+      "name": "🖥️ Raspberry Pi - Hailo Detection",
+      "path": "basic_pipelines"
+    },
+    {
+      "name": "🔌 ESP32 - Cat Feeder",
+      "path": "${env:HOME}/Projects/esp32-catfeeder"
+    }
+  ],
+  "settings": {
+    "terminal.integrated.splitCwd": "workspaceFolder",
+    "files.exclude": {
+      "**/__pycache__": true,
+      "**/*.pyc": true,
+      ".venv": true,
+      "venv_hailo_rpi5_examples": true
+    },
+    "python.defaultInterpreterPath": "${workspaceFolder:🖥️ Raspberry Pi - Hailo Detection}/../venv_hailo_rpi5_examples/bin/python",
+    "[cpp]": {
+      "editor.defaultFormatter": "ms-vscode.cpptools"
+    },
+    "[python]": {
+      "editor.defaultFormatter": "ms-python.black-formatter"
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "platformio.platformio-ide",
+      "ms-python.python",
+      "ms-vscode-remote.remote-ssh",
+      "ms-vscode.cpptools"
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "🐍 Python: Current File (RPi)",
+        "type": "python",
+        "request": "launch",
+        "program": "${file}",
+        "console": "integratedTerminal",
+        "cwd": "${workspaceFolder:🖥️ Raspberry Pi - Hailo Detection}"
+      },
+      {
+        "name": "🔧 PlatformIO Debug (ESP32)",
+        "type": "platformio-debug",
+        "request": "launch",
+        "cwd": "${workspaceFolder:🔌 ESP32 - Cat Feeder}"
+      }
+    ]
+  }
+}
