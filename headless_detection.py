@@ -14,6 +14,7 @@ import cv2
 import hailo
 import logging
 import argparse
+import json
 from datetime import datetime, timedelta
 from hailo_rpi_common import (
     get_caps_from_pad,
@@ -37,6 +38,45 @@ logger = logging.getLogger(__name__)
 MAX_MEMORY_MB = 1200
 MEMORY_CHECK_INTERVAL = 100  # Controlla ogni N frame
 
+# File per salvare stato modalità manuale/automatico
+STATE_FILE = "/tmp/cat_window_state.json"
+
+def _save_window_state(window_controller):
+    """Salva lo stato della finestra prima del riavvio."""
+    try:
+        state = {
+            'manual_mode': window_controller.manual_mode,
+            'is_window_open': window_controller.is_window_open,
+            'timestamp': datetime.now().isoformat()
+        }
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f)
+        logger.info(f"Window state saved: manual_mode={state['manual_mode']}, is_open={state['is_window_open']}")
+    except Exception as e:
+        logger.error(f"Failed to save window state: {e}")
+
+def _load_window_state(window_controller):
+    """Ripristina lo stato della finestra dopo il riavvio."""
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                state = json.load(f)
+
+            # Controlla che lo stato non sia troppo vecchio (max 5 minuti)
+            saved_time = datetime.fromisoformat(state['timestamp'])
+            if (datetime.now() - saved_time).total_seconds() < 300:
+                window_controller.manual_mode = state['manual_mode']
+                logger.info(f"Window state restored: manual_mode={state['manual_mode']}, was_open={state['is_window_open']}")
+                # Rimuovi il file dopo averlo letto
+                os.remove(STATE_FILE)
+                return True
+            else:
+                logger.warning("Window state file too old, ignoring")
+                os.remove(STATE_FILE)
+    except Exception as e:
+        logger.error(f"Failed to load window state: {e}")
+    return False
+
 class HeadlessDetectorApp:
     """Applicazione standalone per rilevamento gatti in modalità headless."""
 
@@ -55,6 +95,9 @@ class HeadlessDetectorApp:
         # Inizializza prima il controller della finestra
         logger.info("Initializing window controller...")
         self.window_controller = WindowController()
+
+        # Ripristina stato manuale/automatico se c'è stato un riavvio recente
+        _load_window_state(self.window_controller)
         
     def _initialize_telegram(self):
         """Inizializza e configura il bot Telegram."""
@@ -231,6 +274,9 @@ def app_callback(pad, info, user_data):
                 logger.warning(f"MEMORY LIMIT EXCEEDED: {mem_mb:.0f}MB but window is OPEN - waiting to restart")
             else:
                 logger.error(f"MEMORY LIMIT EXCEEDED: {mem_mb:.0f}MB > {MAX_MEMORY_MB}MB - Restarting...")
+                # Salva stato manuale/automatico prima del riavvio
+                if hasattr(user_data, 'window_controller'):
+                    _save_window_state(user_data.window_controller)
                 if hasattr(user_data, 'telegram') and user_data.telegram:
                     try:
                         user_data.telegram.send_message(f"⚠️ Riavvio automatico: memoria {mem_mb:.0f}MB")
@@ -246,6 +292,9 @@ def app_callback(pad, info, user_data):
                 logger.warning(f"MAX UPTIME REACHED: {uptime_hours:.1f}h but window is OPEN - waiting to restart")
             else:
                 logger.warning(f"MAX UPTIME REACHED: {uptime_hours:.1f}h - Preventive restart for memory leak")
+                # Salva stato manuale/automatico prima del riavvio
+                if hasattr(user_data, 'window_controller'):
+                    _save_window_state(user_data.window_controller)
                 if hasattr(user_data, 'telegram') and user_data.telegram:
                     try:
                         user_data.telegram.send_message(f"🔄 Riavvio preventivo dopo {uptime_hours:.1f}h di uptime")
