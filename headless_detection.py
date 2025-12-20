@@ -32,8 +32,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Limite massimo di memoria (2GB) - se superato, il processo si riavvia
-MAX_MEMORY_MB = 2000
+# Limite massimo di memoria (1.2GB) - se superato, il processo si riavvia
+# Abbassato da 2GB per prevenire freeze del sistema dovuti a memory leak del driver Hailo
+MAX_MEMORY_MB = 1200
 MEMORY_CHECK_INTERVAL = 100  # Controlla ogni N frame
 
 class HeadlessDetectorApp:
@@ -210,6 +211,7 @@ def app_callback(pad, info, user_data):
     if not hasattr(app_callback, 'frame_count'):
         app_callback.frame_count = 0
         app_callback.last_log_time = datetime.now()
+        app_callback.start_time = datetime.now()
 
     app_callback.frame_count += 1
     current_time = datetime.now()
@@ -231,6 +233,17 @@ def app_callback(pad, info, user_data):
                 except:
                     pass
             os._exit(1)  # Exit per trigger restart da systemd o script
+
+        # Controllo uptime massimo (12 ore) per riavvio preventivo contro memory leak
+        uptime_hours = (current_time - app_callback.start_time).total_seconds() / 3600
+        if uptime_hours > 12:
+            logger.warning(f"MAX UPTIME REACHED: {uptime_hours:.1f}h - Preventive restart for memory leak")
+            if hasattr(user_data, 'telegram') and user_data.telegram:
+                try:
+                    user_data.telegram.send_message(f"🔄 Riavvio preventivo dopo {uptime_hours:.1f}h di uptime")
+                except:
+                    pass
+            os._exit(0)  # Exit pulito per restart
     format, width, height = get_caps_from_pad(pad)
     
     frame = None
