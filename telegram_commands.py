@@ -4,6 +4,7 @@ Include comandi per finestra e gestione alimentazione gatti.
 """
 
 import logging
+import asyncio
 from telegram import Update, BotCommand
 from telegram.ext import (
     CommandHandler,
@@ -11,6 +12,7 @@ from telegram.ext import (
     filters,
     ContextTypes
 )
+from telegram.error import TimedOut, NetworkError
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +26,47 @@ def set_feeding_manager(manager):
 
 class TelegramCommands:
     """Mixin per la gestione dei comandi Telegram."""
-    
+
+    async def _send_message_with_retry(self, update: Update, message: str, max_retries: int = 3, timeout: int = 10) -> bool:
+        """
+        Invia un messaggio Telegram con retry automatico in caso di timeout.
+
+        Args:
+            update: Update object di Telegram
+            message: Messaggio da inviare
+            max_retries: Numero massimo di tentativi (default: 3)
+            timeout: Timeout per ogni tentativo in secondi (default: 10)
+
+        Returns:
+            True se il messaggio è stato inviato con successo, False altrimenti
+        """
+        for attempt in range(max_retries):
+            try:
+                await asyncio.wait_for(
+                    update.message.reply_text(message),
+                    timeout=timeout
+                )
+                return True
+            except (TimedOut, asyncio.TimeoutError) as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Timeout sending message (attempt {attempt + 1}/{max_retries}), retrying...")
+                    await asyncio.sleep(1)  # Breve pausa prima del retry
+                else:
+                    logger.error(f"Failed to send message after {max_retries} attempts: {str(e)}")
+                    return False
+            except NetworkError as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Network error (attempt {attempt + 1}/{max_retries}), retrying...")
+                    await asyncio.sleep(2)
+                else:
+                    logger.error(f"Network error after {max_retries} attempts: {str(e)}")
+                    return False
+            except Exception as e:
+                logger.error(f"Unexpected error sending message: {str(e)}")
+                return False
+
+        return False
+
     async def register_commands(self):
         """Registra i comandi disponibili nel menu del bot."""
         commands = [
@@ -113,127 +155,154 @@ class TelegramCommands:
         """Gestisce il comando /apri."""
         logger.info("Open command received")
         if not self.window_controller:
-            await update.message.reply_text("❌ Controller finestra non disponibile")
+            await self._send_message_with_retry(update, "❌ Controller finestra non disponibile")
             logger.error("Window controller not available")
             return
-            
+
+        # Esegui il comando sulla finestra PRIMA di rispondere
+        command_success = False
+        error_message = None
+
         try:
             # Forza la modalità manuale quando si usa il comando
-            if self.window_controller.set_window_position(True, manual=True):
-                await update.message.reply_text("✅ Comando di apertura inviato!\nModalità manuale attivata")
-                logger.info("Window open command executed successfully")
-            else:
-                await update.message.reply_text("⚠️ La finestra è già aperta o in movimento")
-                logger.info("Window already open or moving")
+            command_success = self.window_controller.set_window_position(True, manual=True)
         except Exception as e:
-            error_msg = f"Errore durante l'apertura: {str(e)}"
-            await update.message.reply_text(f"❌ {error_msg}")
-            logger.error(error_msg)
+            error_message = str(e)
+            logger.error(f"Error executing window command: {e}")
+
+        # Ora invia la risposta con retry
+        if error_message:
+            await self._send_message_with_retry(update, f"❌ Errore durante l'apertura: {error_message}")
+        elif command_success:
+            await self._send_message_with_retry(update, "✅ Comando di apertura inviato!\nModalità manuale attivata")
+            logger.info("Window open command executed successfully")
+        else:
+            await self._send_message_with_retry(update, "⚠️ La finestra è già aperta o in movimento")
+            logger.info("Window already open or moving")
 
     async def _let_in_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gestisce il comando /faientrare - apre senza cambiare modalità."""
         logger.info("Let-in command received")
         if not self.window_controller:
-            await update.message.reply_text("❌ Controller finestra non disponibile")
+            await self._send_message_with_retry(update, "❌ Controller finestra non disponibile")
             logger.error("Window controller not available")
             return
+
+        # Esegui il comando sulla finestra PRIMA di rispondere
+        command_success = False
+        error_message = None
+        current_mode = None
 
         try:
             # Apre la finestra SENZA cambiare la modalità (manual=False)
             # Se era in automatico, rimane automatico
             # Se era in manuale, rimane manuale
             current_mode = "automatica" if self.window_controller.auto_control_enabled() else "manuale"
+            command_success = self.window_controller.set_window_position(True, manual=False)
 
-            if self.window_controller.set_window_position(True, manual=False):
+            if command_success:
                 # Imposta il timestamp let-in per estendere il tempo di chiusura
                 self.window_controller.set_let_in_time()
-                await update.message.reply_text(
-                    f"✅ Finestra aperta per far entrare il gatto!\n"
-                    f"🔄 Modalità: {current_mode} (invariata)\n"
-                    f"⏱️ Chiusura ritardata di 3 secondi extra"
-                )
-                logger.info(f"Let-in command executed, mode unchanged: {current_mode}, close delay extended")
-            else:
-                await update.message.reply_text("⚠️ La finestra è già aperta o in movimento")
-                logger.info("Window already open or moving")
         except Exception as e:
-            error_msg = f"Errore durante l'apertura: {str(e)}"
-            await update.message.reply_text(f"❌ {error_msg}")
-            logger.error(error_msg)
+            error_message = str(e)
+            logger.error(f"Error executing let-in command: {e}")
+
+        # Ora invia la risposta con retry
+        if error_message:
+            await self._send_message_with_retry(update, f"❌ Errore durante l'apertura: {error_message}")
+        elif command_success:
+            await self._send_message_with_retry(
+                update,
+                f"✅ Finestra aperta per far entrare il gatto!\n"
+                f"🔄 Modalità: {current_mode} (invariata)\n"
+                f"⏱️ Chiusura ritardata di 3 secondi extra"
+            )
+            logger.info(f"Let-in command executed, mode unchanged: {current_mode}, close delay extended")
+        else:
+            await self._send_message_with_retry(update, "⚠️ La finestra è già aperta o in movimento")
+            logger.info("Window already open or moving")
 
     async def _close_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gestisce il comando /chiudi."""
         logger.info("Close command received")
         if not self.window_controller:
-            await update.message.reply_text("❌ Controller finestra non disponibile")
+            await self._send_message_with_retry(update, "❌ Controller finestra non disponibile")
             logger.error("Window controller not available")
             return
-            
+
+        # Esegui il comando sulla finestra PRIMA di rispondere
+        command_success = False
+        error_message = None
+
         try:
             # Forza la modalità manuale quando si usa il comando
-            if self.window_controller.set_window_position(False, manual=True):
-                await update.message.reply_text("✅ Comando di chiusura inviato!\nModalità manuale attivata")
-                logger.info("Window close command executed successfully")
-            else:
-                await update.message.reply_text("⚠️ La finestra è già chiusa o in movimento")
-                logger.info("Window already closed or moving")
+            command_success = self.window_controller.set_window_position(False, manual=True)
         except Exception as e:
-            error_msg = f"Errore durante la chiusura: {str(e)}"
-            await update.message.reply_text(f"❌ {error_msg}")
-            logger.error(error_msg)
+            error_message = str(e)
+            logger.error(f"Error executing window command: {e}")
+
+        # Ora invia la risposta con retry
+        if error_message:
+            await self._send_message_with_retry(update, f"❌ Errore durante la chiusura: {error_message}")
+        elif command_success:
+            await self._send_message_with_retry(update, "✅ Comando di chiusura inviato!\nModalità manuale attivata")
+            logger.info("Window close command executed successfully")
+        else:
+            await self._send_message_with_retry(update, "⚠️ La finestra è già chiusa o in movimento")
+            logger.info("Window already closed or moving")
 
     async def _status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gestisce il comando /status."""
         logger.info("Status command received")
         if not self.window_controller:
-            await update.message.reply_text("❌ Controller finestra non disponibile")
+            await self._send_message_with_retry(update, "❌ Controller finestra non disponibile")
             logger.error("Window controller not available")
             return
-            
+
         try:
             status = "🟢 APERTA" if self.window_controller.is_window_open else "🔴 CHIUSA"
             angle = self.window_controller.current_angle
             mode = "🤖 Automatica" if self.window_controller.auto_control_enabled() else "👋 Manuale"
             message = f"Stato finestra: {status}\nAngolo attuale: {angle}°\nModalità: {mode}"
-            await update.message.reply_text(message)
+            await self._send_message_with_retry(update, message)
             logger.info(f"Status sent: {message}")
         except Exception as e:
             error_msg = f"Errore nella lettura dello stato: {str(e)}"
-            await update.message.reply_text(f"❌ {error_msg}")
+            await self._send_message_with_retry(update, f"❌ {error_msg}")
             logger.error(error_msg)
 
     async def _auto_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gestisce il comando /auto."""
         logger.info("Auto mode command received")
         if not self.window_controller:
-            await update.message.reply_text("❌ Controller finestra non disponibile")
+            await self._send_message_with_retry(update, "❌ Controller finestra non disponibile")
             logger.error("Window controller not available")
             return
-            
+
         try:
             self.window_controller.enable_auto_control()
-            await update.message.reply_text("✅ Modalità automatica attivata")
+            await self._send_message_with_retry(update, "✅ Modalità automatica attivata")
             logger.info("Automatic control enabled")
         except Exception as e:
             error_msg = f"Errore nell'attivazione modalità automatica: {str(e)}"
-            await update.message.reply_text(f"❌ {error_msg}")
+            await self._send_message_with_retry(update, f"❌ {error_msg}")
             logger.error(error_msg)
 
     async def _manual_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gestisce il comando /manuale."""
         logger.info("Manual mode command received")
         if not self.window_controller:
-            await update.message.reply_text("❌ Controller finestra non disponibile")
+            await self._send_message_with_retry(update, "❌ Controller finestra non disponibile")
             logger.error("Window controller not available")
             return
-            
+
         try:
             self.window_controller.disable_auto_control()
-            await update.message.reply_text("✅ Modalità manuale attivata\nLa finestra rimarrà nella posizione impostata")
+            await self._send_message_with_retry(update, "✅ Modalità manuale attivata\nLa finestra rimarrà nella posizione impostata")
             logger.info("Manual control enabled")
         except Exception as e:
             error_msg = f"Errore nell'attivazione modalità manuale: {str(e)}"
-            await update.message.reply_text(f"❌ {error_msg}")
+            await self._send_message_with_retry(update, f"❌ {error_msg}")
             logger.error(error_msg)
 
     async def _photo_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
