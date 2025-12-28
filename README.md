@@ -1,420 +1,141 @@
-# 🐱 AI Cat Window Controller
 
-An intelligent cat detection system that automatically controls a motorized window based on cat presence and position, with Telegram bot integration for remote monitoring and control.
+![Banner](doc/images/hailo_rpi_examples_banner.png)
 
-## 🌟 Features
+# Hailo Raspberry Pi 5 Examples
 
-- **Smart Cat Detection**: Uses Hailo AI accelerator with YOLO11m (2024) for highly accurate real-time cat detection
-- **Automatic Window Control**: Opens window when cat is detected
-- **Telegram Integration**:
-  - Real-time notifications with photos
-  - Remote window control
-  - Group chat support for family sharing
-  - System status monitoring
-- **Robust Connection Management**:
-  - Automatic bot reconnection with watchdog
-  - USB serial auto-recovery for Arduino
-  - Network error handling with exponential backoff
-- **Advanced Features**:
-  - Window lock/unlock mechanism
-  - Adaptive confidence thresholds
-  - Image capture with cooldown
-  - Manual/automatic mode switching
+Welcome to the Hailo Raspberry Pi 5 Examples repository. This project showcases various examples demonstrating the capabilities of the Hailo AI processor on a Raspberry Pi 5. These examples will help you get started with AI on embedded devices.
+The examples in this repository are designed to work with the Raspberry Pi AI Kit and AI HAT, supporting both the Hailo8 (26 TOPS) and Hailo8L (13 TOPS) AI processors. The examples can also be run on an x86_64 Ubuntu machine with the Hailo8/8L AI processor.
+Visit the [Hailo Official Website](https://hailo.ai/) and [Hailo Community Forum](https://community.hailo.ai/) for more information.
 
-## 📋 Requirements
+## Table of Contents
 
-### Hardware
-- Raspberry Pi 5
-- Hailo-8L AI accelerator
-- USB camera
-- Arduino (ATMEGA2560) with servo motors
-- USB serial connection (`/dev/ttyUSB0`)
+- [Hailo Raspberry Pi 5 Examples](#hailo-raspberry-pi-5-examples)
+  - [Table of Contents](#table-of-contents)
+  - [Hailo Packages Installation](#hailo-packages-installation)
+    - [Hailo Version Upgrade Instructions](#hailo-version-upgrade-instructions)
+  - [Available Examples and Resources](#available-examples-and-resources)
+    - [Hailo Python API](#hailo-python-api)
+    - [Hailo Examples](#hailo-examples)
+      - [Basic Pipelines (Python)](#basic-pipelines-python)
+        - [Detection Example](#detection-example)
+        - [Pose Estimation Example](#pose-estimation-example)
+        - [Instance Segmentation Example](#instance-segmentation-example)
+      - [CLIP Application](#clip-application)
+      - [Frigate Integration - Coming Soon](#frigate-integration---coming-soon)
+    - [Raspberry Pi Official Examples](#raspberry-pi-official-examples)
+      - [rpicam-apps](#rpicam-apps)
+      - [picamera2](#picamera2)
+    - [Hailo Dataflow Compiler (DFC)](#hailo-dataflow-compiler-dfc)
+  - [Contributing](#contributing)
+  - [License](#license)
+  - [Disclaimer](#disclaimer)
 
-### Software
-- Python 3.11+
-- Hailo SDK for Raspberry Pi
-- Required Python packages (see `requirements.txt`)
+![Raspberry Pi 5 with Hailo AI HAT](doc/images/ai-hat-plus.jpg)
 
-## 🚀 Installation
+## Hailo Packages Installation
 
-1. **Clone the repository**
-```bash
-git clone <repository-url>
-cd hailo-rpi5-examples/basic_pipelines
-```
+For installation instructions, see the [Hailo Raspberry Pi 5 installation guide](doc/install-raspberry-pi5.md#how-to-set-up-raspberry-pi-5-and-hailo).
 
-2. **Create and activate virtual environment**
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
+### Hailo Version Upgrade Instructions
 
-3. **Install dependencies**
-```bash
-pip install -r requirements.txt
-```
+See the [Upgrade or Downgrade Hailo Software](doc/install-raspberry-pi5.md#hailo-version-upgrade-instructions) section for instructions on how to upgrade the Hailo software.
 
-4. **Configure Telegram Bot**
-   - Create a bot via [@BotFather](https://t.me/botfather)
-   - Get your chat ID or group ID
-   - Edit `cat_config.py` with your credentials
+## Available Examples and Resources
 
-5. **Setup Arduino**
-   - Upload the provided Arduino sketch to ATMEGA2560
-   - Connect via USB (should appear as `/dev/ttyUSB0`)
-   - Create symlink: `sudo ln -s /dev/ttyUSB0 /dev/ttyCAT`
+### Hailo Python API
+The Hailo Python API is now available on the Raspberry Pi 5. This API allows you to run inference on the Hailo-8L AI processor using Python.
+For examples, see our [Python code examples](https://github.com/hailo-ai/Hailo-Application-Code-Examples/tree/main/runtime/python).
+Additional examples can be found in RPi [picamera2](#picamera2) code.
+Visit our [HailoRT Python API documentation](https://hailo.ai/developer-zone/documentation/hailort-v4-18-0/?page=api%2Fpython_api.html#module-hailo_platform.drivers) for more information.
 
-## ⚙️ Configuration
+### Hailo Examples
 
-Edit `cat_config.py` to customize:
+#### [Basic Pipelines (Python)](doc/basic-pipelines.md#hailo-rpi5-basic-pipelines)
 
-```python
-# Telegram Configuration
-TELEGRAM_CONFIG = {
-    'token': 'YOUR_BOT_TOKEN',
-    'chat_id': 'YOUR_CHAT_ID',  # Use negative number for groups
-}
+These pipelines are included in this repository. They demonstrate object detection, human pose estimation, and instance segmentation in an easy-to-use format.
+For installation instructions, see the [Basic Pipelines Installation Guide](doc/basic-pipelines.md#installation).
+See our [Developement Guide](doc/basic-pipelines.md#development-guide) for more information on how to use the pipelines to create your own custom pipelines.
 
-# Window Configuration
-WINDOW_CONFIG = {
-    'closed_angle': 77,   # Closed position angle
-    'open_angle': 130,    # Open position angle
-}
 
-# Detection Configuration
-DETECTION_CONFIG = {
-    'min_confidence_closed': 0.7,       # Confidence when window closed
-    'min_confidence_open': 0.5,         # Lower threshold when open
-    'required_detection_time': 10,      # Seconds before opening
-    'required_no_detection_time': 3,    # Seconds before closing
-}
-```
+##### [Detection Example](doc/basic-pipelines.md#detection-example)
+![Detection Example](doc/images/detection.gif)
 
-## 🤖 AI Model
+**Retrained Networks Support**
 
-The system uses **YOLO11m** (November 2024) for object detection:
-- **Model**: YOLO11 Medium (33 MB HEF file)
-- **Accuracy**: High precision with minimal false positives
-- **Performance**: ~23 FPS on Raspberry Pi 5 with Hailo-8
-- **Version**: Compiled from Hailo Model Zoo v2.14.0
+This application includes support for using retrained detection models. For more information, see [Using Retrained Models](doc/basic-pipelines.md#using-retrained-models).
 
-**Alternative Models** (available in `resources/`):
-- `yolov11n.hef` (7 MB) - Faster but less accurate
-- `yolov11s.hef` (18 MB) - Balanced speed/accuracy
-- `yolov8m.hef` (27 MB) - Previous version (2023)
+##### [Pose Estimation Example](doc/basic-pipelines.md#pose-estimation-example)
+![Pose Estimation Example](doc/images/pose_estimation.gif)
 
-To use a different model, modify the `--hef-path` argument in the startup script.
+##### [Instance Segmentation Example](doc/basic-pipelines.md#instance-segmentation-example)
+![Instance Segmentation Example](doc/images/instance_segmentation.gif)
 
-## 🎮 Usage
+#### CLIP Application
 
-### Start the System
+CLIP (Contrastive Language-Image Pretraining) predicts the most relevant text prompt on real-time video frames using the Hailo-8L AI processor.
+See the [hailo-CLIP Repository](https://github.com/hailo-ai/hailo-CLIP) for more information.
+Click the image below to watch the demo on YouTube.
 
-**IMPORTANT: The system starts automatically at boot via cron job**
+[![Watch the demo on YouTube](https://img.youtube.com/vi/XXizBHtCLew/0.jpg)](https://youtu.be/XXizBHtCLew)
 
-The system uses:
-- **Cron job**: `@reboot /home/pi/start-cat-window.sh`
-- **Startup script**: `/home/pi/start-cat-window.sh`
-- **Main application**: `headless_detection.py` (launched by startup script)
 
-To start manually:
-```bash
-cd /home/pi/hailo-rpi5-examples
-source venv_hailo_rpi5_examples/bin/activate
-python basic_pipelines/headless_detection.py --input /dev/video0
-```
+#### Frigate Integration - Coming Soon
 
-Or use the startup script:
-```bash
-/home/pi/start-cat-window.sh
-```
+Frigate is an open-source video surveillance software that runs on a Raspberry Pi. This integration will allow you to use the Hailo-8L AI processor for object detection in real-time video streams.
 
-### Telegram Bot Commands
+### Raspberry Pi Official Examples
 
-- `/start` - Initialize bot and get welcome message
-- `/status` - Get current window status
-- `/apri` - Open window (switches to manual mode)
-- `/faientrare` - Open window to let cat in (keeps current mode)
-- `/chiudi` - Close window
-- `/auto` - Enable automatic mode
-- `/manuale` - Disable automatic mode
-- `/foto` - Request a photo from the system
+#### rpicam-apps
 
-**Note**: When a cat is detected **outside** (right side), the bot sends a notification with the `/faientrare` command suggestion. This opens the window without changing the current mode.
-
-### Manual Window Control (CLI)
+Raspberry Pi [rpicam-apps](https://www.raspberrypi.com/documentation/computers/camera_software.html#rpicam-apps) Hailo post-processing examples.
+This is Raspberry Pi's official example for AI post-processing using the Hailo AI processor integrated into their CPP camera framework.
+The documentation on how to use rpicam-apps can be found [here](https://www.raspberrypi.com/documentation/accessories/ai-kit.html).
+The run command is simplified, and the assets are pre-installed in the system.
+To run an example from rpicam-apps, run:
 
 ```bash
-python3 cat_window.py <command>
-
-Commands:
-  apri              - Unlock and fully open window
-  chiudi            - Close and lock window
-  finestra <angle>  - Set window angle (77-135 degrees)
-  serratura <angle> - Set lock angle (0-90 degrees)
-  sblocca           - Unlock window
-  blocca            - Lock window
+rpicam-hello -t 0 --post-process-file /usr/share/rpi-camera-assets/hailo_yolov6_inference.json
 ```
 
-## 🏗️ Architecture
+See more available examples in the `/usr/share/rpi-camera-assets` directory.
 
-### Main Components (Current System)
+#### picamera2
 
-The system currently in production uses these files:
-
-```
-basic_pipelines/
-├── headless_detection.py      # ⭐ Main entry point (CURRENT)
-├── cat_detector_callback.py   # Detection logic and window control
-├── cat_config.py              # Configuration file
-├── cat_window.py              # CLI tool for manual window control
-├── window_controller.py       # Window/lock servo controller
-├── telegram_base.py           # Telegram bot base with watchdog
-├── telegram_handler.py        # Telegram message handler
-├── telegram_commands.py       # Bot command handlers
-├── telegram_notifications.py  # Notification system
-└── backup_unused/             # Alternative implementations (not used)
-    ├── cat_detector.py        # Alternative main with ROI detection
-    ├── file_manager.py        # File management (alternative system)
-    ├── system_monitor.py      # System monitoring (alternative system)
-    └── README_BACKUP.md       # Documentation for backup files
-```
-
-**Note**: The system is launched by `/home/pi/start-cat-window.sh` via cron `@reboot`.
-
-### System Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                  headless_detection.py                   │
-│                    (Main Process)                        │
-└───────────────┬─────────────────────────┬────────────────┘
-                │                         │
-        ┌───────▼─────────┐      ┌────────▼─────────┐
-        │ cat_detector_   │      │  telegram_       │
-        │   callback.py   │      │  handler.py      │
-        │                 │      │                  │
-        │ • Detection     │      │ • Bot commands   │
-        │ • Time filter   │      │ • Notifications  │
-        │ • Image capture │      │ • Watchdog       │
-        └────────┬────────┘      └──────────────────┘
-                 │
-        ┌────────▼─────────┐
-        │  window_         │
-        │  controller.py   │
-        │                  │
-        │ • Servo control  │
-        │ • Lock control   │
-        │ • State mgmt     │
-        └──────────────────┘
-```
-
-### Detection Flow
-
-```
-Camera → GStreamer → Hailo AI → Cat Detection → Time Filter → Window Control
-                                      ↓                            ↓
-                              Image Capture                 Telegram Notify
-                                      ↓
-                               Telegram Photo
-```
-
-## 🔧 Advanced Features
-
-### Watchdog System
-
-**Multi-Layer Protection Against System Freeze:**
-
-1. **Hardware Watchdog** (BCM2835):
-   - Timeout: 10 seconds
-   - Automatically resets Raspberry Pi if kernel hangs
-   - Configured via `/etc/watchdog.conf`
-
-2. **Kernel Hung Task Detection**:
-   - Detects tasks blocked for >120 seconds
-   - Triggers kernel panic → automatic reboot
-   - Configured via `/etc/sysctl.d/99-watchdog-panic.conf`
-
-3. **Hailo Health Monitor**:
-   - Runs every 5 minutes via cron
-   - Logs temperature, load, detection process status
-   - Log file: `/var/log/hailo-monitor.log`
-   - Alerts if temperature >80°C
-
-4. **Telegram Bot Watchdog**:
-   - Monitors connection health every 5 minutes
-   - Auto-restarts on disconnect (15-minute timeout)
-   - Updates heartbeat on successful operations
-   - Logs connection issues for debugging
-
-**Note**: These protections prevent Hailo driver freezes from permanently locking the system.
-
-### USB Auto-Recovery
-
-If Arduino connection is lost, the system will:
-1. Kill processes holding the port
-2. Reset USB device (unbind/bind)
-3. Retry connection up to 5 times
-4. Wait with exponential backoff
-
-### Detection Logic
-
-- **Position-Based Control**:
-  - Left side of frame (<50%): Opens window for cat entry
-  - Right side of frame (≥50%): Photo only, no window action
-- **Temporal Persistence** (5 seconds):
-  - Ignores brief detection gaps (missing frames)
-  - Maintains position tracking across temporary occlusions
-- **Window Opens**: Cat detected on LEFT continuously for 10+ seconds AND no cats on right
-- **Window Closes**: No qualifying cat detected for 3+ seconds
-- **Adaptive Thresholds**:
-  - Closed window: 0.8 confidence (high to reduce false positives)
-  - Open window: 0.7 confidence (slightly lower when cat already detected)
-- **Photo & Notification**:
-  - Only when cat detected on RIGHT side (outside, wants to enter)
-  - Cat on LEFT = inside, window opens automatically, NO notification
-  - Confidence threshold: 0.8 minimum
-  - Cooldown: 30 seconds between captures
-  - Caption includes: confidence, position, `/faientrare` command suggestion
-
-## 📊 Monitoring
-
-### Logs
+Raspberry Pi [picamera2](https://github.com/raspberrypi/picamera2) is the libcamera-based replacement for Picamera, which was a Python interface to the Raspberry Pi's legacy camera stack. Picamera2 also presents an easy-to-use Python API.
+Run the following command to clone the picamera2 repo and get the example files:
 
 ```bash
-# Real-time log viewing
-tail -f /tmp/cat_detector_output.log
-
-# Detection log
-tail -f basic_pipelines/cat_detector.log
-
-# Hailo health monitor
-tail -f /var/log/hailo-monitor.log
+git clone --depth 1 https://github.com/raspberrypi/picamera2
 ```
 
-### Status Files
-
-- `cat_window_state.json` - Current window state
-- `cats_database.json` - Detected cats database
-- `system_stats.json` - System statistics
-
-### Hailo Health Monitoring
-
-Monitor Hailo module temperature and system health:
-```bash
-# Check current temperature
-cat /sys/class/hwmon/hwmon*/temp*_input | awk '{print $1/1000 "°C"}'
-
-# View health log
-tail -20 /var/log/hailo-monitor.log
-
-# Manual monitoring test
-/home/pi/hailo-monitor.sh
-```
-
-## 🐛 Troubleshooting
-
-### Arduino Not Responding
+The examples will be in `./picamera2/examples/hailo/`.
+To run an example from picamera2, run:
 
 ```bash
-# Manual USB reset
-sudo usbresetusb /dev/ttyUSB0
-
-# Or reboot
-sudo reboot
+cd picamera2/examples/hailo/
+python3 pose.py
 ```
+### Hailo Dataflow Compiler (DFC)
 
-### Bot Not Responding
+The Hailo Dataflow Compiler (DFC) is a software tool that enables developers to compile their neural networks to run on the Hailo-8/8L AI processors.
+The DFC is available for download from the [Hailo Developer Zone](https://hailo.ai/developer-zone/software-downloads/) (Registration required).
+For examples, tutorials, and retrain instructions, see the [Hailo Model Zoo Repo](https://github.com/hailo-ai/hailo_model_zoo).
+Additional documentation and [tutorials](https://hailo.ai/developer-zone/documentation/dataflow-compiler/latest/?sp_referrer=tutorials/tutorials.html) can be found in the [Hailo Developer Zone Documentation](https://hailo.ai/developer-zone/documentation/).
+For a full end-to-end training and deployment example, see the [Retraining Example](doc/retraining-example.md).
+The detection basic pipeline example includes support for retrained models. For more information, see [Using Retrained Models](doc/basic-pipelines.md#using-retrained-models).
 
-Check logs for watchdog activity:
-```bash
-grep "Watchdog" /tmp/cat_detector_output.log
-```
+## Contributing
 
-### Detection Issues
+We welcome contributions from the community. You can contribute by:
+1. Opening a pull request.
+2. Reporting issues and bugs.
+3. Suggesting new features or improvements.
+4. Joining the discussion on the [Hailo Community Forum](https://community.hailo.ai/).
 
-- Adjust `min_confidence` in `cat_config.py`
-- Check camera with: `v4l2-ctl --list-devices`
-- Verify Hailo model is loaded
+## License
 
-### System Freeze / Hailo Lockup
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-If the system becomes completely unresponsive (SSH not working):
+## Disclaimer
 
-**Cause**: Hailo PCIe driver can occasionally cause kernel deadlock
-
-**Protection Mechanisms** (automatically enabled):
-1. **Hardware watchdog**: Resets system after 10s of kernel hang
-2. **Hung task detector**: Triggers panic if tasks blocked >120s
-3. **Health monitor**: Logs Hailo temperature every 5 minutes
-
-**Check after reboot**:
-```bash
-# View last boot time
-uptime
-
-# Check Hailo health history
-tail -50 /var/log/hailo-monitor.log
-
-# Verify watchdog is running
-sudo systemctl status watchdog
-
-# Check kernel panic settings
-sysctl kernel.hung_task_panic kernel.panic
-```
-
-**Manual intervention** (if system is still responsive):
-```bash
-# Check Hailo temperature
-cat /sys/class/hwmon/hwmon*/temp*_input | awk '{print $1/1000 "°C"}'
-
-# Restart detection process
-sudo pkill -f headless_detection
-/home/pi/start-cat-window.sh
-
-# Force Hailo driver reload (last resort)
-sudo rmmod hailo_pci && sudo modprobe hailo_pci
-```
-
-## 📦 Backup
-
-Before major changes, create a backup:
-
-```bash
-tar -czf cat_detector_backup_$(date +%Y%m%d).tar.gz \
-  basic_pipelines/cat_*.py \
-  basic_pipelines/telegram_*.py \
-  basic_pipelines/window_controller.py \
-  cat_classifier.h5 \
-  cats_database.json \
-  cat_window_state.json
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## 📝 License
-
-This project is licensed under the MIT License - see LICENSE file for details.
-
-## 🙏 Acknowledgments
-
-- Hailo AI for the excellent accelerator
-- python-telegram-bot for Telegram integration
-- pymodbus for serial communication
-
-## 👨‍👩‍👧‍👦 Family-Friendly Features
-
-This project was designed for families to:
-- Monitor their cats remotely
-- Share updates in a family group chat
-- Control the window from anywhere
-- Keep cats safe while parents are away (perfect for university students missing their pets!)
-
----
-
-**Made with ❤️ for cats and their families**
+This code example is provided by Hailo solely on an “AS IS” basis and “with all faults.” No responsibility or liability is accepted or shall be imposed upon Hailo regarding the accuracy, merchantability, completeness, or suitability of the code example. Hailo shall not have any liability or responsibility for errors or omissions in, or any business decisions made by you in reliance on this code example or any part of it. If an error occurs when running this example, please open a ticket in the "Issues" tab.
