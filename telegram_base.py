@@ -55,9 +55,11 @@ class TelegramBase:
 
         # Watchdog per monitorare la connessione
         self.last_heartbeat = time.time()
+        self.last_polling_time = time.time()  # Timestamp ultimo polling riuscito
         self.watchdog_running = False
         self.watchdog_interval = 300  # Controlla ogni 5 minuti
         self.heartbeat_timeout = 900  # 15 minuti senza heartbeat = problema
+        self.polling_timeout = 1800  # 30 minuti senza update ricevuti = problema (rileva polling bloccato)
         self.connection_failures = 0  # Contatore fallimenti consecutivi
         self.max_connection_failures = 3  # Riavvia dopo 3 fallimenti consecutivi
 
@@ -108,46 +110,62 @@ class TelegramBase:
 
                 # Controlla l'ultimo heartbeat
                 time_since_heartbeat = time.time() - self.last_heartbeat
+
                 if time_since_heartbeat > self.heartbeat_timeout:
                     logger.error(f"Watchdog: Nessun heartbeat da {time_since_heartbeat:.0f}s - Bot potrebbe essere disconnesso")
-                    # Tenta di riavviare il bot
                     self._restart_bot()
-                    self.connection_failures = 0  # Reset contatore dopo riavvio
+                    self.connection_failures = 0
+                    continue
+
+                # Tenta un ping per verificare la connessione API
+                api_ok = self._check_connection()
+                if not api_ok:
+                    self.connection_failures += 1
+                    logger.warning(f"Watchdog: Controllo connessione fallito ({self.connection_failures}/{self.max_connection_failures})")
+                    if self.connection_failures >= self.max_connection_failures:
+                        logger.error(f"Watchdog: Troppi fallimenti consecutivi, riavvio bot")
+                        self._restart_bot()
+                        self.connection_failures = 0
                 else:
-                    # Tenta un ping per verificare la connessione
-                    if not self._check_connection():
-                        self.connection_failures += 1
-                        logger.warning(f"Watchdog: Controllo connessione fallito ({self.connection_failures}/{self.max_connection_failures})")
-                        # Riavvia solo dopo N fallimenti consecutivi
-                        if self.connection_failures >= self.max_connection_failures:
-                            logger.error(f"Watchdog: Troppi fallimenti consecutivi, riavvio bot")
-                            self._restart_bot()
-                            self.connection_failures = 0
+                    # API funziona - controlla anche se il polling è attivo
+                    time_since_polling = time.time() - self.last_polling_time
+                    if time_since_polling > self.polling_timeout:
+                        # API OK ma polling bloccato - questo è il caso problematico!
+                        logger.error(f"Watchdog: API OK ma polling bloccato da {time_since_polling:.0f}s - Riavvio bot")
+                        self._restart_bot()
+                        self.connection_failures = 0
                     else:
-                        # Reset contatore se connessione OK
+                        # Tutto OK
                         if self.connection_failures > 0:
                             logger.info(f"Watchdog: Connessione ripristinata dopo {self.connection_failures} fallimenti")
                         self.connection_failures = 0
-                        logger.debug(f"Watchdog: Connessione OK (ultimo heartbeat: {time_since_heartbeat:.0f}s fa)")
+                        logger.debug(f"Watchdog: Tutto OK (heartbeat: {time_since_heartbeat:.0f}s, polling: {time_since_polling:.0f}s)")
 
             except Exception as e:
                 logger.error(f"Watchdog: Errore nel loop: {e}")
 
     def _check_connection(self) -> bool:
         """
-        Verifica la connessione del bot provando a fare una chiamata API leggera.
+        Verifica la connessione del bot con chiamata HTTP diretta (indipendente dall'event loop).
 
         Returns:
             True se la connessione è attiva, False altrimenti
         """
+        import urllib.request
+        import urllib.error
         try:
-            if self.application and self.event_loop and self.bot_initialized:
-                # Prova a ottenere le info del bot (operazione leggera)
-                result = self._run_coroutine(self.application.bot.get_me())
-                if result:
-                    # Aggiorna l'heartbeat se la chiamata ha successo
+            # Usa urllib direttamente per non dipendere dall'event loop del bot
+            # che potrebbe essere bloccato
+            url = f"https://api.telegram.org/bot{self.bot_token}/getMe"
+            req = urllib.request.Request(url, method='GET')
+            with urllib.request.urlopen(req, timeout=10) as response:
+                if response.status == 200:
                     self.last_heartbeat = time.time()
+                    # NON aggiornare last_polling_time qui - solo _on_any_update lo fa
                     return True
+            return False
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+            logger.debug(f"Controllo connessione fallito: {e}")
             return False
         except Exception as e:
             logger.debug(f"Controllo connessione fallito: {e}")
@@ -254,6 +272,11 @@ class TelegramBase:
             # Questo metodo sarà esteso dalle classi derivate
             await self._setup_handlers()
             
+            # Aggiungi handler per tracciare il polling (gruppo -1 = eseguito prima di tutti gli altri)
+            from telegram.ext import TypeHandler
+            from telegram import Update
+            self.application.add_handler(TypeHandler(Update, self._on_any_update), group=-1)
+
             # Avvia il polling
             await self.application.updater.start_polling(
                 poll_interval=0.5,
@@ -264,7 +287,7 @@ class TelegramBase:
                 connect_timeout=15,
                 drop_pending_updates=True
             )
-            
+
             logger.info("Telegram bot base initialized")
             await self._send_message("🟢 Sistema di rilevamento gatti avviato")
             
@@ -279,7 +302,15 @@ class TelegramBase:
         Questo metodo deve essere implementato nelle classi derivate.
         """
         pass
-    
+
+    async def _on_any_update(self, update, context):
+        """
+        Handler chiamato per ogni update ricevuto dal polling.
+        Usato per tracciare che il polling è attivo.
+        """
+        self.last_polling_time = time.time()
+        logger.debug(f"Polling update received, timestamp updated")
+
     def _run_coroutine(self, coroutine):
         """
         Esegue una coroutine nel loop degli eventi del bot in modo sicuro.

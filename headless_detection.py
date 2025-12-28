@@ -26,10 +26,14 @@ from telegram_handler import TelegramHandler
 from cat_feeding_manager import CatFeedingManager
 import telegram_commands
 
-# Configurazione logging
+# Configurazione logging con FileHandler
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("/home/pi/hailo-rpi5-examples/cat_detector.log"),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
