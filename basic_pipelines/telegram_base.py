@@ -225,8 +225,9 @@ class TelegramBase:
             self.bot_thread.daemon = True
             self.bot_thread.start()
 
-            # Attendi l'inizializzazione
-            timeout = 20
+            # Attendi l'inizializzazione (30s è ragionevole per connessioni instabili)
+            # Ref: https://github.com/python-telegram-bot/python-telegram-bot/wiki/Handling-network-errors
+            timeout = 30
             start_time = time.time()
             while not self.bot_initialized and (time.time() - start_time) < timeout:
                 time.sleep(0.5)
