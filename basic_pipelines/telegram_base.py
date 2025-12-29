@@ -62,6 +62,8 @@ class TelegramBase:
         self.polling_timeout = 1800  # 30 minuti senza update ricevuti = problema (rileva polling bloccato)
         self.connection_failures = 0  # Contatore fallimenti consecutivi
         self.max_connection_failures = 3  # Riavvia dopo 3 fallimenti consecutivi
+        self.bot_init_failures = 0  # Contatore fallimenti inizializzazione bot
+        self.max_bot_init_failures = 6  # Dopo 6 fallimenti (30 min) termina il processo
 
         logger.info("Initializing Telegram base handler...")
     
@@ -105,8 +107,21 @@ class TelegramBase:
 
                 # Verifica se il bot è inizializzato
                 if not self.bot_initialized:
-                    logger.warning("Watchdog: Bot non inizializzato")
+                    self.bot_init_failures += 1
+                    logger.warning(f"Watchdog: Bot non inizializzato ({self.bot_init_failures}/{self.max_bot_init_failures})")
+
+                    # Dopo troppi fallimenti, termina il processo per forzare restart completo
+                    if self.bot_init_failures >= self.max_bot_init_failures:
+                        logger.error(f"Watchdog: Bot non inizializzato da troppo tempo - Terminazione processo per restart")
+                        import os
+                        os._exit(1)  # Termina il processo, lo script esterno lo riavvierà
+
+                    # Tenta di riavviare il bot
+                    self._restart_bot()
                     continue
+
+                # Bot è inizializzato - reset contatore fallimenti
+                self.bot_init_failures = 0
 
                 # Controlla l'ultimo heartbeat
                 time_since_heartbeat = time.time() - self.last_heartbeat
@@ -178,11 +193,32 @@ class TelegramBase:
 
             # Ferma il bot corrente
             self.bot_initialized = False
+
+            # Chiudi application se esiste
+            if self.application:
+                try:
+                    if self.event_loop and self.event_loop.is_running():
+                        # Ferma il polling e l'application
+                        future = asyncio.run_coroutine_threadsafe(
+                            self._cleanup_application(), self.event_loop
+                        )
+                        try:
+                            future.result(timeout=5)
+                        except:
+                            pass
+                except Exception as e:
+                    logger.debug(f"Errore cleanup application: {e}")
+
+            # Ferma l'event loop
             if self.event_loop and self.event_loop.is_running():
                 self.event_loop.call_soon_threadsafe(self.event_loop.stop)
 
             # Attendi che il thread si fermi
-            time.sleep(2)
+            time.sleep(3)
+
+            # Reset application
+            self.application = None
+            self.event_loop = None
 
             # Riavvia il bot
             self.bot_thread = threading.Thread(target=self._run_bot)
@@ -190,7 +226,7 @@ class TelegramBase:
             self.bot_thread.start()
 
             # Attendi l'inizializzazione
-            timeout = 15
+            timeout = 20
             start_time = time.time()
             while not self.bot_initialized and (time.time() - start_time) < timeout:
                 time.sleep(0.5)
@@ -198,11 +234,24 @@ class TelegramBase:
             if self.bot_initialized:
                 logger.info("✅ Bot riavviato con successo")
                 self.last_heartbeat = time.time()
+                self.last_polling_time = time.time()
             else:
                 logger.error("❌ Riavvio del bot fallito")
 
         except Exception as e:
             logger.error(f"Errore durante il riavvio del bot: {e}")
+
+    async def _cleanup_application(self):
+        """Cleanup asincrono dell'application."""
+        try:
+            if self.application:
+                if self.application.updater and self.application.updater.running:
+                    await self.application.updater.stop()
+                if self.application.running:
+                    await self.application.stop()
+                await self.application.shutdown()
+        except Exception as e:
+            logger.debug(f"Cleanup application error: {e}")
 
     def _start_queue_processor(self):
         """Avvia il thread di elaborazione della coda dei ritentativi."""
