@@ -8,7 +8,6 @@ import cv2
 import logging
 from datetime import datetime, timedelta
 from hailo_rpi_common import app_callback_class
-from window_controller import WindowController
 
 # Configurazione logging
 logger = logging.getLogger(__name__)
@@ -22,7 +21,7 @@ class HeadlessCatDetectorCallback(app_callback_class):
     def __init__(self):
         """Inizializza il detector con configurazione predefinita."""
         super().__init__()
-        self.window_controller = WindowController()
+        self.window_controller = None  # Verrà impostato da headless_detection.py
 
         # Il gestore Telegram verrà impostato dall'applicazione principale
         self.telegram = None
