@@ -32,12 +32,16 @@ Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver(0x40);
 // Variabili globali per servo finestra
 volatile float currentWindowAngle = WINDOW_MIN_ANGLE;
 volatile float targetWindowAngle = WINDOW_MIN_ANGLE;
+volatile bool windowServoInitialized = false;  // True dopo il primo comando Modbus
 
 // Variabili globali per servo serratura
 volatile float currentLockAngle = LOCK_MIN_ANGLE;
 volatile float targetLockAngle = LOCK_MIN_ANGLE;
+volatile bool lockServoInitialized = false;  // True dopo il primo comando Modbus
 
 unsigned long lastStepTime = 0;
+uint16_t lastWindowSetpoint = WINDOW_MIN_ANGLE * 10;  // Ultimo setpoint ricevuto
+uint16_t lastLockSetpoint = LOCK_MIN_ANGLE * 10;  // Ultimo setpoint ricevuto
 
 // Converte angolo in valore PWM per il servo finestra
 uint16_t windowAngleToPulse(float angle) {
@@ -78,29 +82,44 @@ void setup() {
   // Setup PCA9685
   pwm.begin();
   pwm.setPWMFreq(50);  // 50Hz per servo standard
-  
-  // Forza i servo alle posizioni iniziali
-  // Finestra: posizione minima (77°)
-  currentWindowAngle = WINDOW_MIN_ANGLE;
-  targetWindowAngle = WINDOW_MIN_ANGLE;
-  pwm.setPWM(WINDOW_SERVO_CHANNEL, 0, windowAngleToPulse(currentWindowAngle));
-  
-  // Serratura: posizione chiusa (0°)
-  currentLockAngle = LOCK_MIN_ANGLE;
-  targetLockAngle = LOCK_MIN_ANGLE;
-  pwm.setPWM(LOCK_SERVO_CHANNEL, 0, lockAngleToPulse(currentLockAngle));
-  
-  delay(1000);  // Attendi che i servo raggiungano la posizione
+
+  // NON forzare i servo alle posizioni iniziali!
+  // Lascia che il loop faccia il ramping graduale per evitare
+  // movimenti bruschi dopo un reset/riavvio.
+  // I target sono già impostati ai valori minimi dalle variabili globali.
+  // Il servo si muoverà gradualmente verso il target nel loop.
+
+  delay(100);  // Breve attesa per stabilizzare il PCA9685
 }
 
 void updateWindowServo() {
   // Leggi angolo richiesto dal registro (già in gradi x10)
   uint16_t requestedAngle_x10 = mb.Hreg(0);
   float requestedAngle = (float)requestedAngle_x10 / 10.0;
-  
+
+  // Rileva se è arrivato un nuovo setpoint via Modbus
+  if (requestedAngle_x10 != lastWindowSetpoint) {
+    lastWindowSetpoint = requestedAngle_x10;
+
+    // Primo comando dopo reset: inizializza currentAngle al target
+    // per evitare ramping da una posizione sconosciuta
+    if (!windowServoInitialized) {
+      currentWindowAngle = constrain(requestedAngle, WINDOW_MIN_ANGLE, WINDOW_MAX_ANGLE);
+      windowServoInitialized = true;
+      pwm.setPWM(WINDOW_SERVO_CHANNEL, 0, windowAngleToPulse(currentWindowAngle));
+      mb.Hreg(1, (uint16_t)(currentWindowAngle * 10));
+      return;
+    }
+  }
+
+  // Non muovere il servo finché non è inizializzato
+  if (!windowServoInitialized) {
+    return;
+  }
+
   // Verifica che l'angolo sia nel range valido
   targetWindowAngle = constrain(requestedAngle, WINDOW_MIN_ANGLE, WINDOW_MAX_ANGLE);
-  
+
   // Movimento graduale verso il target
   if (abs(targetWindowAngle - currentWindowAngle) > ANGLE_STEP) {
     if (targetWindowAngle > currentWindowAngle) {
@@ -108,11 +127,11 @@ void updateWindowServo() {
     } else {
       currentWindowAngle -= ANGLE_STEP;
     }
-    
+
     // Aggiorna posizione servo
     pwm.setPWM(WINDOW_SERVO_CHANNEL, 0, windowAngleToPulse(currentWindowAngle));
   }
-  
+
   // Aggiorna registro posizione attuale
   mb.Hreg(1, (uint16_t)(currentWindowAngle * 10));
 }
@@ -121,10 +140,29 @@ void updateLockServo() {
   // Leggi angolo richiesto dal registro (già in gradi x10)
   uint16_t requestedAngle_x10 = mb.Hreg(2);
   float requestedAngle = (float)requestedAngle_x10 / 10.0;
-  
+
+  // Rileva se è arrivato un nuovo setpoint via Modbus
+  if (requestedAngle_x10 != lastLockSetpoint) {
+    lastLockSetpoint = requestedAngle_x10;
+
+    // Primo comando dopo reset: inizializza currentAngle al target
+    if (!lockServoInitialized) {
+      currentLockAngle = constrain(requestedAngle, LOCK_MIN_ANGLE, LOCK_MAX_ANGLE);
+      lockServoInitialized = true;
+      pwm.setPWM(LOCK_SERVO_CHANNEL, 0, lockAngleToPulse(currentLockAngle));
+      mb.Hreg(3, (uint16_t)(currentLockAngle * 10));
+      return;
+    }
+  }
+
+  // Non muovere il servo finché non è inizializzato
+  if (!lockServoInitialized) {
+    return;
+  }
+
   // Verifica che l'angolo sia nel range valido
   targetLockAngle = constrain(requestedAngle, LOCK_MIN_ANGLE, LOCK_MAX_ANGLE);
-  
+
   // Movimento graduale verso il target (più veloce della finestra)
   if (abs(targetLockAngle - currentLockAngle) > LOCK_ANGLE_STEP) {
     if (targetLockAngle > currentLockAngle) {
@@ -132,11 +170,11 @@ void updateLockServo() {
     } else {
       currentLockAngle -= LOCK_ANGLE_STEP;
     }
-    
+
     // Aggiorna posizione servo
     pwm.setPWM(LOCK_SERVO_CHANNEL, 0, lockAngleToPulse(currentLockAngle));
   }
-  
+
   // Aggiorna registro posizione attuale
   mb.Hreg(3, (uint16_t)(currentLockAngle * 10));
 }
