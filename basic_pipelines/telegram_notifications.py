@@ -4,10 +4,14 @@ Modulo per la gestione delle notifiche Telegram per il sistema di rilevamento ga
 
 import logging
 import os
+import json
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+# File marker per indicare riavvio automatico (watchdog, memoria, uptime)
+AUTO_RESTART_MARKER = "/tmp/cat_auto_restart.json"
 
 class TelegramNotifications:
     """Mixin per la gestione delle notifiche Telegram."""
@@ -15,11 +19,34 @@ class TelegramNotifications:
     def send_startup_notification(self) -> bool:
         """
         Invia una notifica di avvio del sistema.
-        
+        Salta la notifica se è un riavvio automatico (watchdog, memoria, uptime).
+
         Returns:
             bool: True se la notifica è stata inviata, False altrimenti
         """
         try:
+            # Controlla se è un riavvio automatico
+            if os.path.exists(AUTO_RESTART_MARKER):
+                try:
+                    with open(AUTO_RESTART_MARKER, 'r') as f:
+                        marker = json.load(f)
+                    saved_time = datetime.fromisoformat(marker['timestamp'])
+                    # Se il marker è recente (< 5 minuti), è un riavvio automatico
+                    if (datetime.now() - saved_time).total_seconds() < 300:
+                        reason = marker.get('reason', 'unknown')
+                        logger.info(f"Skipping startup notification (auto-restart: {reason})")
+                        os.remove(AUTO_RESTART_MARKER)
+                        return True
+                    else:
+                        logger.info("Auto-restart marker too old, sending normal startup notification")
+                        os.remove(AUTO_RESTART_MARKER)
+                except Exception as e:
+                    logger.warning(f"Error reading auto-restart marker: {e}")
+                    try:
+                        os.remove(AUTO_RESTART_MARKER)
+                    except:
+                        pass
+
             startup_message = "🟢 Sistema di rilevamento gatti avviato e operativo"
             return self.send_message(startup_message)
         except Exception as e:

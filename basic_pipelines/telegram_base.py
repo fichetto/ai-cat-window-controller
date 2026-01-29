@@ -7,10 +7,14 @@ import logging
 import threading
 import asyncio
 import time
+import json
 import concurrent.futures
 from typing import Optional, Callable, Any, Dict
 from datetime import datetime
 from telegram import Update, BotCommand, Bot
+
+# File marker per riavvio automatico
+AUTO_RESTART_MARKER = "/tmp/cat_auto_restart.json"
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes
@@ -114,6 +118,13 @@ class TelegramBase:
                     if self.bot_init_failures >= self.max_bot_init_failures:
                         logger.error(f"Watchdog: Bot non inizializzato da troppo tempo - Terminazione processo per restart")
                         import os
+                        # Marca come riavvio automatico per non inviare notifica
+                        try:
+                            marker = {'reason': 'watchdog_bot_init_timeout', 'timestamp': datetime.now().isoformat()}
+                            with open(AUTO_RESTART_MARKER, 'w') as f:
+                                json.dump(marker, f)
+                        except:
+                            pass
                         os._exit(1)  # Termina il processo, lo script esterno lo riavvierà
 
                     # Tenta di riavviare il bot

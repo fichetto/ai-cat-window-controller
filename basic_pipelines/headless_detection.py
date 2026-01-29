@@ -45,6 +45,22 @@ MEMORY_CHECK_INTERVAL = 100  # Controlla ogni N frame
 # File per salvare stato modalità manuale/automatico
 STATE_FILE = "/tmp/cat_window_state.json"
 
+# File marker per riavvio automatico (importato da telegram_notifications)
+AUTO_RESTART_MARKER = "/tmp/cat_auto_restart.json"
+
+def _mark_auto_restart(reason: str):
+    """Crea un marker per indicare che il prossimo avvio è un riavvio automatico."""
+    try:
+        marker = {
+            'reason': reason,
+            'timestamp': datetime.now().isoformat()
+        }
+        with open(AUTO_RESTART_MARKER, 'w') as f:
+            json.dump(marker, f)
+        logger.info(f"Auto-restart marker created: {reason}")
+    except Exception as e:
+        logger.error(f"Failed to create auto-restart marker: {e}")
+
 def _save_window_state(window_controller):
     """Salva lo stato della finestra prima del riavvio."""
     try:
@@ -281,11 +297,8 @@ def app_callback(pad, info, user_data):
                 # Salva stato manuale/automatico prima del riavvio
                 if hasattr(user_data, 'window_controller'):
                     _save_window_state(user_data.window_controller)
-                if hasattr(user_data, 'telegram') and user_data.telegram:
-                    try:
-                        user_data.telegram.send_message(f"⚠️ Riavvio automatico: memoria {mem_mb:.0f}MB")
-                    except:
-                        pass
+                # Marca come riavvio automatico per non inviare notifica
+                _mark_auto_restart(f"memory_limit_{mem_mb:.0f}MB")
                 os._exit(1)  # Exit per trigger restart da systemd o script
 
         # Controllo uptime massimo (12 ore) per riavvio preventivo contro memory leak
@@ -299,11 +312,8 @@ def app_callback(pad, info, user_data):
                 # Salva stato manuale/automatico prima del riavvio
                 if hasattr(user_data, 'window_controller'):
                     _save_window_state(user_data.window_controller)
-                if hasattr(user_data, 'telegram') and user_data.telegram:
-                    try:
-                        user_data.telegram.send_message(f"🔄 Riavvio preventivo dopo {uptime_hours:.1f}h di uptime")
-                    except:
-                        pass
+                # Marca come riavvio automatico per non inviare notifica
+                _mark_auto_restart(f"max_uptime_{uptime_hours:.1f}h")
                 os._exit(0)  # Exit pulito per restart
     format, width, height = get_caps_from_pad(pad)
     
