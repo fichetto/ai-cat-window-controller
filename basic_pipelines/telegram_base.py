@@ -182,7 +182,7 @@ class TelegramBase:
         try:
             # Usa urllib direttamente per non dipendere dall'event loop del bot
             # che potrebbe essere bloccato
-            url = f"https://api.telegram.org/bot{self.bot_token}/getMe"
+            url = f"https://api.telegram.org/bot{self.token}/getMe"
             req = urllib.request.Request(url, method='GET')
             with urllib.request.urlopen(req, timeout=10) as response:
                 if response.status == 200:
@@ -350,7 +350,6 @@ class TelegramBase:
             )
 
             logger.info("Telegram bot base initialized")
-            await self._send_message("🟢 Sistema di rilevamento gatti avviato")
             
         except Exception as e:
             logger.error(f"Failed to initialize Telegram bot: {e}", exc_info=True)

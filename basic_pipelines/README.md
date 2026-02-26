@@ -109,23 +109,44 @@ To use a different model, modify the `--hef-path` argument in the startup script
 
 ### Start the System
 
-**IMPORTANT: The system starts automatically at boot via cron job**
+**The system runs as a systemd service and starts automatically at boot.**
 
-The system uses:
-- **Cron job**: `@reboot /home/pi/start-cat-window.sh`
-- **Startup script**: `/home/pi/start-cat-window.sh`
-- **Main application**: `headless_detection.py` (launched by startup script)
+#### Service Management
 
-To start manually:
+```bash
+# Check status
+sudo systemctl status cat-window
+
+# Start/stop/restart
+sudo systemctl start cat-window
+sudo systemctl stop cat-window
+sudo systemctl restart cat-window
+
+# View logs in real-time
+journalctl -u cat-window -f
+
+# View recent logs
+journalctl -u cat-window --since "1 hour ago"
+```
+
+#### Service Installation (first time only)
+
+```bash
+# Copy service file
+sudo cp basic_pipelines/scripts/cat-window.service /etc/systemd/system/
+
+# Reload systemd and enable
+sudo systemctl daemon-reload
+sudo systemctl enable cat-window
+sudo systemctl start cat-window
+```
+
+#### Manual Start (for development/debugging)
+
 ```bash
 cd /home/pi/hailo-rpi5-examples
 source venv_hailo_rpi5_examples/bin/activate
 python basic_pipelines/headless_detection.py --input /dev/video0
-```
-
-Or use the startup script:
-```bash
-/home/pi/start-cat-window.sh
 ```
 
 ### Telegram Bot Commands
@@ -179,7 +200,7 @@ basic_pipelines/
     └── README_BACKUP.md       # Documentation for backup files
 ```
 
-**Note**: The system is launched by `/home/pi/start-cat-window.sh` via cron `@reboot`.
+**Note**: The system runs as a systemd service (`cat-window.service`).
 
 ### System Architecture
 
@@ -281,8 +302,11 @@ If Arduino connection is lost, the system will:
 ### Logs
 
 ```bash
-# Real-time log viewing
-tail -f /tmp/cat_detector_output.log
+# Service logs (real-time)
+journalctl -u cat-window -f
+
+# Service logs (last hour)
+journalctl -u cat-window --since "1 hour ago"
 
 # Detection log
 tail -f basic_pipelines/cat_detector.log
@@ -367,9 +391,8 @@ sysctl kernel.hung_task_panic kernel.panic
 # Check Hailo temperature
 cat /sys/class/hwmon/hwmon*/temp*_input | awk '{print $1/1000 "°C"}'
 
-# Restart detection process
-sudo pkill -f headless_detection
-/home/pi/start-cat-window.sh
+# Restart detection service
+sudo systemctl restart cat-window
 
 # Force Hailo driver reload (last resort)
 sudo rmmod hailo_pci && sudo modprobe hailo_pci
