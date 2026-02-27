@@ -26,6 +26,14 @@ class HeadlessCatDetectorCallback(app_callback_class):
         # Il gestore Telegram verrà impostato dall'applicazione principale
         self.telegram = None
 
+        # === Source tracking per multi-camera ===
+        self.current_source = 'usb'  # 'usb' o 'rtsp'
+        self.current_camera = None   # Nome camera RTSP (None per USB)
+        self.rtsp_notification_cooldowns = {}  # {(camera, label): last_time}
+        self.rtsp_notification_cooldown = timedelta(seconds=60)  # Cooldown 1 minuto
+        self.rtsp_save_dir = "detected_objects"
+        self.rtsp_notifications_enabled = True  # Flag per abilitare/disabilitare notifiche RTSP
+
         # Configurazione soglie di confidenza
         self.min_confidence_closed = 0.8  # Soglia quando finestra chiusa (alzata per ridurre falsi positivi)
         self.min_confidence_open = 0.7    # Soglia ridotta quando finestra aperta
@@ -252,3 +260,57 @@ class HeadlessCatDetectorCallback(app_callback_class):
                         logger.info(f"Closing window - {message}")
                         if self.telegram:
                             self.telegram.send_window_status(False, message)
+
+    # === Metodi per RTSP multi-camera ===
+
+    def can_send_rtsp_notification(self, camera_name, label):
+        """
+        Verifica se è possibile inviare una notifica per una camera RTSP.
+
+        Args:
+            camera_name (str): Nome della camera
+            label (str): Classe rilevata (cat, person, etc.)
+
+        Returns:
+            bool: True se può inviare notifica (cooldown scaduto)
+        """
+        key = (camera_name, label)
+        current_time = datetime.now()
+
+        last_time = self.rtsp_notification_cooldowns.get(key)
+        if last_time is None or (current_time - last_time) >= self.rtsp_notification_cooldown:
+            self.rtsp_notification_cooldowns[key] = current_time
+            return True
+        return False
+
+    def save_rtsp_image(self, frame, camera_name, label, confidence):
+        """
+        Salva un'immagine rilevata da camera RTSP.
+
+        Args:
+            frame (numpy.ndarray): Frame da salvare (BGR)
+            camera_name (str): Nome della camera
+            label (str): Classe rilevata
+            confidence (float): Confidenza del rilevamento
+
+        Returns:
+            str: Percorso del file salvato
+        """
+        # Crea directory per camera se non esiste
+        camera_dir = os.path.join(self.rtsp_save_dir, camera_name.lower().replace(' ', '_'))
+        os.makedirs(camera_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{camera_dir}/{label}_{timestamp}_{confidence:.2f}.jpg"
+
+        try:
+            # Converti da RGB a BGR se necessario
+            if frame is not None and len(frame.shape) == 3:
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(filename, frame_bgr)
+                logger.info(f"[{camera_name}] Image saved: {filename}")
+                return filename
+        except Exception as e:
+            logger.error(f"[{camera_name}] Error saving image: {e}")
+
+        return None

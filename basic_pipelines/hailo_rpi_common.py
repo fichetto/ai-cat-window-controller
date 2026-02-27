@@ -150,14 +150,15 @@ def get_default_parser():
 
 def get_source_type(input_source):
     # This function will return the source type based on the input source
-    # return values can be "file", "mipi" or "usb"
+    # return values can be "file", "rpi", "usb", or "rtsp"
     if input_source.startswith("/dev/video"):
         return 'usb'
+    elif input_source.startswith("rpi"):
+        return 'rpi'
+    elif input_source.startswith("rtsp://") or input_source.startswith("rtsps://"):
+        return 'rtsp'
     else:
-        if input_source.startswith("rpi"):
-            return 'rpi'
-        else:
-            return 'file'
+        return 'file'
 
 def QUEUE(name, max_size_buffers=3, max_size_bytes=0, max_size_time=0, leaky='no'):
     """
@@ -201,6 +202,12 @@ def SOURCE_PIPELINE(video_source, video_format='RGB', video_width=640, video_hei
         source_element = (
             f'v4l2src device={video_source} name={name} ! '
             'video/x-raw, width=640, height=480 ! '
+        )
+    elif source_type == 'rtsp':
+        source_element = (
+            f'rtspsrc location="{video_source}" name={name} latency=300 ! '
+            f'{QUEUE(name=f"{name}_queue_rtpdepay")} ! '
+            'rtph264depay ! h264parse ! avdec_h264 max-threads=2 ! '
         )
     else:
         source_element = (

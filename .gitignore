@@ -168,10 +168,12 @@ build.release/
 hailort*.log
 cat_detector.log
 detected_cats/
+detected_objects/
 named_cats/
 cats_database.json
 cat_window_state.json
 system_stats.json
+tapo_config.py
 
 # Large model files
 *.h5

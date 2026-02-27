@@ -1,0 +1,40 @@
+[Unit]
+Description=Tapo Multi-Camera AI Detection System
+Documentation=https://github.com/hailo-ai/hailo-rpi5-examples
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/hailo-rpi5-examples
+
+# Script wrapper che configura ambiente e lancia l'app
+ExecStart=/home/pi/hailo-rpi5-examples/basic_pipelines/scripts/tapo-detection-service.sh
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Limite restart: max 10 in 1 ora (3600 secondi)
+StartLimitIntervalSec=3600
+StartLimitBurst=10
+
+# Timeout avvio (attesa device Hailo + connessione RTSP)
+TimeoutStartSec=180
+
+# Ambiente
+Environment=HOME=/home/pi
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Accesso a device hardware
+SupplementaryGroups=video
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tapo-detection
+
+[Install]
+WantedBy=multi-user.target

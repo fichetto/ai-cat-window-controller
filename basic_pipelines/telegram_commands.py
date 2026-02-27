@@ -5,7 +5,7 @@ Include comandi per finestra e gestione alimentazione gatti.
 
 import logging
 import asyncio
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     CommandHandler,
     MessageHandler,
@@ -16,30 +16,49 @@ from telegram.error import TimedOut, NetworkError
 
 logger = logging.getLogger(__name__)
 
-# Il feeding manager verrà impostato dall'esterno
+# Manager globali (impostati dall'esterno)
 _feeding_manager = None
+_camera_manager = None
 
 def set_feeding_manager(manager):
     """Imposta il feeding manager globale."""
     global _feeding_manager
     _feeding_manager = manager
 
+def set_camera_manager(manager):
+    """Imposta il camera manager globale per gestione telecamere RTSP."""
+    global _camera_manager
+    _camera_manager = manager
+
+# Mappa bottoni → comandi
+BUTTON_MAP = {
+    "🟢 Apri": "/apri",
+    "🔴 Chiudi": "/chiudi",
+    "🐱 Fai entrare": "/faientrare",
+    "📊 Status": "/status",
+    "🤖 Auto": "/auto",
+    "👋 Manuale": "/manuale",
+    "🔔 Notifiche ON": "/notificheon",
+    "🔕 Notifiche OFF": "/notificheoff",
+    "📷 Telecamere": "/telecamere",
+    "🔧 Reset Servo": "/resetservo",
+}
+
+def get_main_keyboard():
+    """Crea la tastiera persistente con bottoni."""
+    keyboard = [
+        [KeyboardButton("🟢 Apri"), KeyboardButton("🔴 Chiudi"), KeyboardButton("🐱 Fai entrare")],
+        [KeyboardButton("🤖 Auto"), KeyboardButton("👋 Manuale"), KeyboardButton("📊 Status")],
+        [KeyboardButton("🔔 Notifiche ON"), KeyboardButton("🔕 Notifiche OFF"), KeyboardButton("📷 Telecamere")],
+        [KeyboardButton("🔧 Reset Servo")],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 class TelegramCommands:
     """Mixin per la gestione dei comandi Telegram."""
 
     async def _send_message_with_retry(self, update: Update, message: str, max_retries: int = 3, timeout: int = 10) -> bool:
-        """
-        Invia un messaggio Telegram con retry automatico in caso di timeout.
-
-        Args:
-            update: Update object di Telegram
-            message: Messaggio da inviare
-            max_retries: Numero massimo di tentativi (default: 3)
-            timeout: Timeout per ogni tentativo in secondi (default: 10)
-
-        Returns:
-            True se il messaggio è stato inviato con successo, False altrimenti
-        """
+        """Invia un messaggio Telegram con retry automatico in caso di timeout."""
         for attempt in range(max_retries):
             try:
                 await asyncio.wait_for(
@@ -50,7 +69,7 @@ class TelegramCommands:
             except (TimedOut, asyncio.TimeoutError) as e:
                 if attempt < max_retries - 1:
                     logger.warning(f"Timeout sending message (attempt {attempt + 1}/{max_retries}), retrying...")
-                    await asyncio.sleep(1)  # Breve pausa prima del retry
+                    await asyncio.sleep(1)
                 else:
                     logger.error(f"Failed to send message after {max_retries} attempts: {str(e)}")
                     return False
@@ -74,17 +93,25 @@ class TelegramCommands:
             BotCommand("apri", "Apre la finestra (passa a manuale)"),
             BotCommand("faientrare", "Apre la finestra (mantiene modalità)"),
             BotCommand("chiudi", "Chiude la finestra"),
-            BotCommand("status", "Mostra lo stato della finestra"),
+            BotCommand("status", "Mostra lo stato del sistema"),
             BotCommand("auto", "Attiva controllo automatico"),
             BotCommand("manuale", "Disattiva controllo automatico"),
             BotCommand("foto", "Richiedi una foto dal sistema"),
+            # Comandi telecamere RTSP
+            BotCommand("telecamere", "Lista telecamere e stato"),
+            BotCommand("cam", "Abilita/disabilita camera: /cam nome on|off"),
+            BotCommand("notifiche", "Stato notifiche RTSP"),
+            BotCommand("notificheon", "Attiva notifiche RTSP"),
+            BotCommand("notificheoff", "Disattiva notifiche RTSP"),
+            # Comandi manutenzione
+            BotCommand("resetservo", "Reset servo in protezione"),
             # Comandi gestione gatti/alimentazione
             BotCommand("gatti", "Lista gatti registrati"),
             BotCommand("classifica", "Classifica pasti giornaliera"),
             BotCommand("registra", "Registra nuovo gatto: /registra Nome Peso"),
             BotCommand("chiesto", "Identifica ultimo gatto: /chiesto Nome"),
         ]
-        
+
         try:
             await self.application.bot.set_my_commands(commands)
             logger.info("Bot commands registered successfully")
@@ -92,7 +119,7 @@ class TelegramCommands:
         except Exception as e:
             logger.error(f"Failed to register bot commands: {e}")
             return False
-    
+
     def setup_command_handlers(self):
         """Aggiunge gli handler per i comandi."""
         # Comandi finestra
@@ -104,15 +131,27 @@ class TelegramCommands:
         self.application.add_handler(CommandHandler("auto", self._auto_command))
         self.application.add_handler(CommandHandler("manuale", self._manual_command))
         self.application.add_handler(CommandHandler("foto", self._photo_command))
+        # Comandi manutenzione
+        self.application.add_handler(CommandHandler("resetservo", self._reset_servo_command))
+        # Comandi telecamere RTSP
+        self.application.add_handler(CommandHandler("telecamere", self._cameras_list_command))
+        self.application.add_handler(CommandHandler("cam", self._camera_toggle_command))
+        self.application.add_handler(CommandHandler("notifiche", self._notifications_toggle_command))
+        self.application.add_handler(CommandHandler("notificheon", self._notifications_on_command))
+        self.application.add_handler(CommandHandler("notificheoff", self._notifications_off_command))
         # Comandi gestione gatti
         self.application.add_handler(CommandHandler("gatti", self._cats_list_command))
         self.application.add_handler(CommandHandler("classifica", self._feeding_stats_command))
         self.application.add_handler(CommandHandler("registra", self._register_cat_command))
         self.application.add_handler(CommandHandler("chiesto", self._identify_cat_command))
+        # Handler per bottoni tastiera (testo che corrisponde ai bottoni)
+        self.application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND, self._button_handler
+        ))
         # Handler per comandi sconosciuti
         self.application.add_handler(MessageHandler(filters.COMMAND, self._unknown_command))
         logger.info("Command handlers configured")
-    
+
     async def _unknown_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gestisce comandi sconosciuti."""
         await update.message.reply_text(
@@ -121,9 +160,13 @@ class TelegramCommands:
             "/apri - Apre la finestra\n"
             "/faientrare - Apre per far entrare il gatto\n"
             "/chiudi - Chiude la finestra\n"
-            "/status - Stato della finestra\n"
+            "/status - Stato del sistema\n"
             "/auto - Modalità automatica\n"
             "/manuale - Modalità manuale\n\n"
+            "📷 Comandi telecamere:\n"
+            "/telecamere - Lista telecamere\n"
+            "/cam nome on|off - Abilita/disabilita\n"
+            "/notifiche on|off - Notifiche RTSP\n\n"
             "🐱 Comandi gatti:\n"
             "/gatti - Lista gatti registrati\n"
             "/classifica - Pasti di oggi\n"
@@ -137,19 +180,36 @@ class TelegramCommands:
         logger.info("Start command received")
         await update.message.reply_text(
             "👋 Ciao! Sono il bot di controllo gatti.\n\n"
-            "📍 Comandi finestra:\n"
-            "/apri - Apre la finestra\n"
-            "/faientrare - Apre per far entrare il gatto\n"
-            "/chiudi - Chiude la finestra\n"
-            "/status - Stato della finestra\n"
-            "/auto - Modalità automatica\n"
-            "/manuale - Modalità manuale\n\n"
-            "🐱 Comandi gatti:\n"
-            "/gatti - Lista gatti registrati\n"
-            "/classifica - Pasti di oggi\n"
-            "/registra Nome Peso - Registra gatto\n"
-            "/chiesto Nome - Identifica ultimo gatto"
+            "Usa i bottoni qui sotto oppure i comandi /slash.",
+            reply_markup=get_main_keyboard()
         )
+
+    async def _button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce i tap sui bottoni della tastiera."""
+        text = update.message.text
+        command = BUTTON_MAP.get(text)
+        if command is None:
+            return  # Ignora messaggi non riconosciuti
+
+        logger.info(f"Button pressed: {text} -> {command}")
+
+        # Mappa comando → handler
+        handlers = {
+            "/apri": self._open_command,
+            "/chiudi": self._close_command,
+            "/faientrare": self._let_in_command,
+            "/status": self._status_command,
+            "/auto": self._auto_command,
+            "/manuale": self._manual_command,
+            "/notificheon": self._notifications_on_command,
+            "/notificheoff": self._notifications_off_command,
+            "/telecamere": self._cameras_list_command,
+            "/resetservo": self._reset_servo_command,
+        }
+
+        handler = handlers.get(command)
+        if handler:
+            await handler(update, context)
 
     async def _open_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gestisce il comando /apri."""
@@ -159,18 +219,15 @@ class TelegramCommands:
             logger.error("Window controller not available")
             return
 
-        # Esegui il comando sulla finestra PRIMA di rispondere
         command_success = False
         error_message = None
 
         try:
-            # Forza la modalità manuale quando si usa il comando
             command_success = self.window_controller.set_window_position(True, manual=True)
         except Exception as e:
             error_message = str(e)
             logger.error(f"Error executing window command: {e}")
 
-        # Ora invia la risposta con retry
         if error_message:
             await self._send_message_with_retry(update, f"❌ Errore durante l'apertura: {error_message}")
         elif command_success:
@@ -188,26 +245,20 @@ class TelegramCommands:
             logger.error("Window controller not available")
             return
 
-        # Esegui il comando sulla finestra PRIMA di rispondere
         command_success = False
         error_message = None
         current_mode = None
 
         try:
-            # Apre la finestra SENZA cambiare la modalità (manual=False)
-            # Se era in automatico, rimane automatico
-            # Se era in manuale, rimane manuale
             current_mode = "automatica" if self.window_controller.auto_control_enabled() else "manuale"
             command_success = self.window_controller.set_window_position(True, manual=False)
 
             if command_success:
-                # Imposta il timestamp let-in per estendere il tempo di chiusura
                 self.window_controller.set_let_in_time()
         except Exception as e:
             error_message = str(e)
             logger.error(f"Error executing let-in command: {e}")
 
-        # Ora invia la risposta con retry
         if error_message:
             await self._send_message_with_retry(update, f"❌ Errore durante l'apertura: {error_message}")
         elif command_success:
@@ -230,18 +281,15 @@ class TelegramCommands:
             logger.error("Window controller not available")
             return
 
-        # Esegui il comando sulla finestra PRIMA di rispondere
         command_success = False
         error_message = None
 
         try:
-            # Forza la modalità manuale quando si usa il comando
             command_success = self.window_controller.set_window_position(False, manual=True)
         except Exception as e:
             error_message = str(e)
             logger.error(f"Error executing window command: {e}")
 
-        # Ora invia la risposta con retry
         if error_message:
             await self._send_message_with_retry(update, f"❌ Errore durante la chiusura: {error_message}")
         elif command_success:
@@ -254,22 +302,35 @@ class TelegramCommands:
     async def _status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gestisce il comando /status."""
         logger.info("Status command received")
-        if not self.window_controller:
-            await self._send_message_with_retry(update, "❌ Controller finestra non disponibile")
-            logger.error("Window controller not available")
-            return
 
-        try:
-            status = "🟢 APERTA" if self.window_controller.is_window_open else "🔴 CHIUSA"
-            angle = self.window_controller.current_angle
-            mode = "🤖 Automatica" if self.window_controller.auto_control_enabled() else "👋 Manuale"
-            message = f"Stato finestra: {status}\nAngolo attuale: {angle}°\nModalità: {mode}"
-            await self._send_message_with_retry(update, message)
-            logger.info(f"Status sent: {message}")
-        except Exception as e:
-            error_msg = f"Errore nella lettura dello stato: {str(e)}"
-            await self._send_message_with_retry(update, f"❌ {error_msg}")
-            logger.error(error_msg)
+        message_parts = []
+
+        if self.window_controller:
+            try:
+                status = "🟢 APERTA" if self.window_controller.is_window_open else "🔴 CHIUSA"
+                angle = self.window_controller.current_angle
+                mode = "🤖 Auto" if self.window_controller.auto_control_enabled() else "👋 Manuale"
+                message_parts.append(f"🪟 Finestra: {status} ({angle}°)\n📍 Modalità: {mode}")
+            except Exception as e:
+                message_parts.append(f"🪟 Finestra: ❌ Errore")
+                logger.error(f"Window status error: {e}")
+        else:
+            message_parts.append("🪟 Finestra: ⚠️ Non disponibile")
+
+        global _camera_manager
+        if _camera_manager:
+            try:
+                cam_status = _camera_manager.get_status()
+                if cam_status:
+                    notif_enabled = getattr(self.user_data, 'rtsp_notifications_enabled', True) if hasattr(self, 'user_data') else True
+                    notif_status = "🔔" if notif_enabled else "🔕"
+                    message_parts.append(f"\n📷 Telecamere: {cam_status} {notif_status}")
+            except Exception as e:
+                logger.error(f"Camera status error: {e}")
+
+        message = "\n".join(message_parts)
+        await self._send_message_with_retry(update, message)
+        logger.info("Status sent")
 
     async def _auto_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gestisce il comando /auto."""
@@ -306,12 +367,85 @@ class TelegramCommands:
             logger.error(error_msg)
 
     async def _photo_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """
-        Gestisce il comando /foto.
-        Richiede una foto al sistema. Deve essere implementato dalle classi derivate.
-        """
+        """Gestisce il comando /foto."""
         await update.message.reply_text("⚠️ Funzionalità non implementata")
         logger.warning("Photo command not implemented in base class")
+
+    # ==================== COMANDI MANUTENZIONE ====================
+
+    async def _reset_servo_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Gestisce il comando /resetservo - Reset servo in protezione.
+        Prova prima il reset soft (PCA9685), poi DTR, poi USB.
+        """
+        logger.info("Reset servo command received")
+        await self._send_message_with_retry(update, "🔧 Tentativo reset servo...")
+
+        import subprocess
+        import os
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        cat_window = os.path.join(script_dir, "cat_window.py")
+
+        # 1. Prova reset soft PCA9685
+        try:
+            result = subprocess.run(
+                ["python3", cat_window, "reset"],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                await self._send_message_with_retry(
+                    update,
+                    "✅ Reset PCA9685 completato!\nIl servo dovrebbe essere operativo."
+                )
+                logger.info("PCA9685 soft reset successful")
+                return
+            else:
+                logger.warning(f"PCA9685 soft reset failed: {result.stderr}")
+        except Exception as e:
+            logger.warning(f"PCA9685 soft reset error: {e}")
+
+        # 2. Fallback: reset Arduino via DTR
+        await self._send_message_with_retry(update, "⚠️ Reset soft fallito, provo reset Arduino via DTR...")
+        try:
+            result = subprocess.run(
+                ["python3", cat_window, "hardreset"],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                await self._send_message_with_retry(
+                    update,
+                    "✅ Reset Arduino completato!\nAttendere qualche secondo prima di usare la finestra."
+                )
+                logger.info("Arduino DTR reset successful")
+                return
+            else:
+                logger.warning(f"Arduino DTR reset failed: {result.stderr}")
+        except Exception as e:
+            logger.warning(f"Arduino DTR reset error: {e}")
+
+        # 3. Ultimo tentativo: reset USB
+        await self._send_message_with_retry(update, "⚠️ Reset DTR fallito, provo reset USB...")
+        try:
+            result = subprocess.run(
+                ["python3", cat_window, "usbreset"],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                await self._send_message_with_retry(
+                    update,
+                    "✅ Reset USB completato!\nAttendere 5 secondi prima di usare la finestra."
+                )
+                logger.info("USB reset successful")
+                return
+        except Exception as e:
+            logger.error(f"USB reset error: {e}")
+
+        await self._send_message_with_retry(
+            update,
+            "❌ Tutti i tentativi di reset falliti.\nPotrebbe essere necessario togliere alimentazione."
+        )
+        logger.error("All servo reset attempts failed")
 
     # ==================== COMANDI GESTIONE GATTI ====================
 
@@ -348,11 +482,7 @@ class TelegramCommands:
             await update.message.reply_text(f"❌ Errore: {e}")
 
     async def _register_cat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """
-        Gestisce il comando /registra - Registra un nuovo gatto.
-        Uso: /registra Nome Peso
-        Esempio: /registra Luna 4.2
-        """
+        """Gestisce il comando /registra - Registra un nuovo gatto."""
         logger.info("Register cat command received")
         global _feeding_manager
 
@@ -375,7 +505,6 @@ class TelegramCommands:
             await update.message.reply_text("❌ Peso non valido. Usa un numero (es. 4.2)")
             return
 
-        # Tolleranza opzionale (default 0.3kg)
         tolerance = 0.3
         if len(args) >= 3:
             try:
@@ -398,11 +527,7 @@ class TelegramCommands:
             await update.message.reply_text(f"❌ Errore: {e}")
 
     async def _identify_cat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """
-        Gestisce il comando /chiesto - Identifica l'ultimo gatto sconosciuto.
-        Uso: /chiesto Nome
-        Esempio: /chiesto Luna
-        """
+        """Gestisce il comando /chiesto - Identifica l'ultimo gatto sconosciuto."""
         logger.info("Identify cat command received")
         global _feeding_manager
 
@@ -436,3 +561,144 @@ class TelegramCommands:
         except Exception as e:
             logger.error(f"Error identifying cat: {e}")
             await update.message.reply_text(f"❌ Errore: {e}")
+
+    # ==================== COMANDI TELECAMERE RTSP ====================
+
+    async def _cameras_list_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce il comando /telecamere - Lista telecamere configurate."""
+        logger.info("Cameras list command received")
+        global _camera_manager
+
+        if _camera_manager is None:
+            try:
+                from tapo_config import TAPO_CAMERAS
+                if not TAPO_CAMERAS:
+                    await update.message.reply_text("📷 Nessuna telecamera configurata")
+                    return
+
+                msg = "📷 *Telecamere configurate:*\n\n"
+                for cam in TAPO_CAMERAS:
+                    status = "🟢" if cam.get('enabled', True) else "🔴"
+                    classes = ", ".join(cam.get('detect_classes', ['cat', 'person']))
+                    msg += f"{status} *{cam['name']}*\n"
+                    msg += f"   Classi: {classes}\n"
+                await update.message.reply_text(msg, parse_mode='Markdown')
+            except ImportError:
+                await update.message.reply_text("⚠️ Configurazione telecamere non trovata")
+            except Exception as e:
+                await update.message.reply_text(f"❌ Errore: {e}")
+            return
+
+        try:
+            msg = _camera_manager.get_cameras_info()
+            await update.message.reply_text(msg, parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"Error getting cameras list: {e}")
+            await update.message.reply_text(f"❌ Errore: {e}")
+
+    async def _camera_toggle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce il comando /cam - Abilita o disabilita una telecamera."""
+        logger.info("Camera toggle command received")
+        global _camera_manager
+
+        args = context.args
+        if len(args) < 2:
+            await update.message.reply_text(
+                "❌ Uso: /cam nome on|off\n"
+                "Esempio: /cam corridoio off\n\n"
+                "Usa /telecamere per vedere le telecamere disponibili."
+            )
+            return
+
+        camera_name = args[0]
+        action = args[1].lower()
+
+        if action not in ['on', 'off']:
+            await update.message.reply_text("❌ Azione non valida. Usa 'on' o 'off'")
+            return
+
+        enable = (action == 'on')
+
+        if _camera_manager is None:
+            try:
+                import tapo_config
+                found = False
+                for cam in tapo_config.TAPO_CAMERAS:
+                    if cam['name'].lower() == camera_name.lower():
+                        cam['enabled'] = enable
+                        found = True
+                        break
+
+                if found:
+                    status = "abilitata 🟢" if enable else "disabilitata 🔴"
+                    await update.message.reply_text(
+                        f"✅ Telecamera *{camera_name}* {status}\n"
+                        f"⚠️ Riavvia il servizio per applicare:\n"
+                        f"`sudo systemctl restart cat-window`",
+                        parse_mode='Markdown'
+                    )
+                else:
+                    await update.message.reply_text(f"❌ Telecamera '{camera_name}' non trovata")
+            except Exception as e:
+                await update.message.reply_text(f"❌ Errore: {e}")
+            return
+
+        try:
+            success = _camera_manager.toggle_camera(camera_name, enable)
+            if success:
+                status = "abilitata 🟢" if enable else "disabilitata 🔴"
+                await update.message.reply_text(f"✅ Telecamera *{camera_name}* {status}", parse_mode='Markdown')
+            else:
+                await update.message.reply_text(f"❌ Telecamera '{camera_name}' non trovata")
+        except Exception as e:
+            logger.error(f"Error toggling camera: {e}")
+            await update.message.reply_text(f"❌ Errore: {e}")
+
+    async def _notifications_toggle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce il comando /notifiche - Abilita/disabilita notifiche RTSP."""
+        logger.info("Notifications toggle command received")
+
+        if not hasattr(self, 'user_data') or self.user_data is None:
+            await update.message.reply_text("⚠️ Sistema non disponibile")
+            return
+
+        args = context.args
+
+        if not args:
+            enabled = getattr(self.user_data, 'rtsp_notifications_enabled', True)
+            status = "🟢 Attive" if enabled else "🔴 Disattivate"
+            await update.message.reply_text(
+                f"📷 Notifiche telecamere RTSP: {status}\n\n"
+                f"Usa /notifiche on|off per modificare"
+            )
+            return
+
+        action = args[0].lower()
+        if action not in ['on', 'off']:
+            await update.message.reply_text("❌ Uso: /notifiche on|off")
+            return
+
+        enable = (action == 'on')
+        self.user_data.rtsp_notifications_enabled = enable
+
+        status = "🟢 attivate" if enable else "🔴 disattivate"
+        await update.message.reply_text(f"✅ Notifiche telecamere RTSP {status}")
+        logger.info(f"RTSP notifications {'enabled' if enable else 'disabled'}")
+
+    async def _notifications_on_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce il comando /notificheon."""
+        if not hasattr(self, 'user_data') or self.user_data is None:
+            await update.message.reply_text("⚠️ Sistema non disponibile")
+            return
+        self.user_data.rtsp_notifications_enabled = True
+        await update.message.reply_text("✅ Notifiche telecamere RTSP 🟢 attivate")
+        logger.info("RTSP notifications enabled via direct command")
+
+    async def _notifications_off_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce il comando /notificheoff."""
+        if not hasattr(self, 'user_data') or self.user_data is None:
+            await update.message.reply_text("⚠️ Sistema non disponibile")
+            return
+        self.user_data.rtsp_notifications_enabled = False
+        await update.message.reply_text("✅ Notifiche telecamere RTSP 🔴 disattivate")
+        logger.info("RTSP notifications disabled via direct command")

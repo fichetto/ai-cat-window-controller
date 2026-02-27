@@ -6,22 +6,16 @@ import time
 def set_window_angle(client, angle):
     """
     Imposta l'angolo della finestra e attende il completamento del movimento
-    
+
     Args:
         client: client Modbus
         angle: angolo desiderato (45-135 gradi)
     """
-    # Converti l'angolo direttamente in formato registro (x10)
     angle_reg = int(round(angle * 10))
-    
-    # Scrivi setpoint
+
     try:
         print(f"Invio setpoint finestra {angle}°...")
-        result = client.write_register(
-            address=0,
-            value=angle_reg,
-            slave=1
-        )
+        result = client.write_register(address=0, value=angle_reg, slave=1)
         if result is None:
             raise Exception("Nessuna risposta dal dispositivo")
     except Exception as e:
@@ -29,70 +23,54 @@ def set_window_angle(client, angle):
         return False
 
     print("Setpoint finestra inviato correttamente")
-    
-    # Attendi completamento movimento
+
     print("Movimento finestra in corso...")
-    timeout = 30  # secondi
+    timeout = 30
     start_time = time.time()
     last_value = None
-    
+
     while True:
         if (time.time() - start_time) > timeout:
             print("Timeout movimento finestra")
             return False
-            
+
         try:
-            result = client.read_holding_registers(
-                address=1,
-                count=1,
-                slave=1
-            )
+            result = client.read_holding_registers(address=1, count=1, slave=1)
             if result is None:
                 print("Nessuna risposta durante la lettura")
                 time.sleep(0.5)
                 continue
-                
-            # Leggi l'angolo attuale (già in gradi x10)
+
             current_angle = float(result.registers[0]) / 10.0
-            
+
             if current_angle != last_value:
                 print(f"Posizione attuale finestra: {current_angle:.1f}°")
                 last_value = current_angle
-            
-            # Verifica se abbiamo raggiunto la posizione con tolleranza di 0.1 gradi
+
             if abs(current_angle - angle) <= 0.1:
                 print(f"Posizione finestra raggiunta: {angle}°")
                 return True
-                
+
         except Exception as e:
             print(f"Errore lettura: {e}")
             time.sleep(0.5)
             continue
-            
+
         time.sleep(0.1)
 
 def set_lock_angle(client, angle):
     """
     Imposta l'angolo della serratura
-    
+
     Args:
         client: client Modbus
         angle: angolo desiderato (0-90 gradi)
-    
-    Returns:
-        bool: True se l'operazione è riuscita, False altrimenti
     """
-    # Converti l'angolo direttamente in formato registro (x10)
     angle_reg = int(round(angle * 10))
-    
-    # Scrivi setpoint
+
     try:
         print(f"Invio setpoint serratura {angle}°...")
-        result = client.write_register(
-            address=2,  # Registro per il servo serratura
-            value=angle_reg,
-            slave=1
-        )
+        result = client.write_register(address=2, value=angle_reg, slave=1)
         if result is None:
             raise Exception("Nessuna risposta dal dispositivo")
     except Exception as e:
@@ -100,137 +78,124 @@ def set_lock_angle(client, angle):
         return False
 
     print("Setpoint serratura inviato correttamente")
-    
-    # Attendi breve conferma
+
     print("Impostazione serratura in corso...")
-    time.sleep(1)  # Breve attesa
-    
+    time.sleep(1)
+
     try:
-        result = client.read_holding_registers(
-            address=3,  # Registro stato serratura
-            count=1,
-            slave=1
-        )
+        result = client.read_holding_registers(address=3, count=1, slave=1)
         if result is None:
             print("Nessuna risposta durante la lettura serratura")
             return False
-            
-        # Leggi l'angolo attuale (già in gradi x10)
+
         current_angle = float(result.registers[0]) / 10.0
         print(f"Posizione attuale serratura: {current_angle:.1f}°")
-        
-        # Verifica con tolleranza maggiore per la serratura
+
         if abs(current_angle - angle) <= 5.0:
             print(f"Posizione serratura impostata: {angle}°")
             return True
         else:
             print(f"Errore: la serratura non ha raggiunto la posizione richiesta")
             return False
-                
+
     except Exception as e:
         print(f"Errore lettura serratura: {e}")
         return False
 
 def lock_window(client):
-    """
-    Blocca la finestra (serratura a 0°)
-    
-    Args:
-        client: client Modbus
-    
-    Returns:
-        bool: True se l'operazione è riuscita
-    """
+    """Blocca la finestra (serratura a 0°)"""
     return set_lock_angle(client, 0)
 
 def unlock_window(client):
-    """
-    Sblocca la finestra (serratura a 90°)
-    
-    Args:
-        client: client Modbus
-    
-    Returns:
-        bool: True se l'operazione è riuscita
-    """
+    """Sblocca la finestra (serratura a 90°)"""
     return set_lock_angle(client, 90)
 
 def open_window(client):
-    """
-    Sblocca e apre completamente la finestra
-    
-    Args:
-        client: client Modbus
-    
-    Returns:
-        bool: True se l'operazione è riuscita
-    """
-    # Prima sblocca
+    """Sblocca e apre completamente la finestra"""
     if not unlock_window(client):
         print("Errore durante lo sblocco della finestra")
         return False
-    
-    # Poi apri
+
     if not set_window_angle(client, 120):
         print("Errore durante l'apertura della finestra")
         return False
-    
+
     return True
 
 def close_window(client):
-    """
-    Chiude e blocca la finestra
-    
-    Args:
-        client: client Modbus
-    
-    Returns:
-        bool: True se l'operazione è riuscita
-    """
-    # Prima chiudi
+    """Chiude e blocca la finestra"""
     if not set_window_angle(client, 77):
         print("Errore durante la chiusura della finestra")
         return False
-    
-    # Breve attesa per assicurarsi che la finestra sia completamente chiusa
+
     time.sleep(1)
-    
-    # Poi blocca
+
     if not lock_window(client):
         print("Errore durante il blocco della finestra")
         return False
-    
+
     return True
 
+def reset_pca9685(client):
+    """
+    Reset soft del PCA9685 via registro Modbus (registro 4).
+    Reinizializza il driver PWM senza resettare l'Arduino.
+    Utile quando il servo va in protezione.
+    """
+    try:
+        print("Reset PCA9685 via Modbus...")
+        result = client.write_register(address=4, value=1, slave=1)
+        if result is None:
+            raise Exception("Nessuna risposta dal dispositivo")
+        time.sleep(1)
+        print("Reset PCA9685 completato")
+        return True
+    except Exception as e:
+        print(f"Errore reset PCA9685: {e}")
+        return False
+
+def reset_arduino_dtr():
+    """
+    Reset dell'Arduino tramite toggle della linea DTR.
+    Equivale a premere il pulsante reset sull'Arduino.
+    """
+    import serial
+    try:
+        print("Reset Arduino via DTR...")
+        ser = serial.Serial('/dev/ttyCAT', 115200)
+        ser.setDTR(False)
+        time.sleep(0.1)
+        ser.setDTR(True)
+        ser.close()
+        time.sleep(3)
+        print("Reset Arduino completato")
+        return True
+    except Exception as e:
+        print(f"Errore reset DTR: {e}")
+        return False
+
 def reset_usb_device():
-    """
-    Resetta la porta USB per forzare la riconnessione dell'Arduino
-    """
+    """Resetta la porta USB per forzare la riconnessione dell'Arduino"""
     import os
     import subprocess
 
     try:
         print("Resettando porta USB...")
-        # Trova il dispositivo USB ttyUSB0
         result = subprocess.run(
             ["readlink", "-f", "/sys/class/tty/ttyUSB0/device"],
-            capture_output=True,
-            text=True
+            capture_output=True, text=True
         )
 
         if result.returncode == 0:
             device_path = result.stdout.strip()
-            # Risale al device USB
             usb_device = device_path.split('/usb')[0] + '/usb' + device_path.split('/usb')[1].split('/')[0]
 
-            # Unbind
             subprocess.run(
                 ["sudo", "sh", "-c", f"echo '{usb_device.split('/')[-1]}' > /sys/bus/usb/drivers/usb/unbind"],
                 stderr=subprocess.DEVNULL
             )
             time.sleep(1)
 
-            # Bind
             subprocess.run(
                 ["sudo", "sh", "-c", f"echo '{usb_device.split('/')[-1]}' > /sys/bus/usb/drivers/usb/bind"],
                 stderr=subprocess.DEVNULL
@@ -244,44 +209,25 @@ def reset_usb_device():
     return False
 
 def connect_with_retry(max_retries=5, retry_delay=2):
-    """
-    Tenta di connettersi alla porta seriale con retry automatici
-
-    Args:
-        max_retries: Numero massimo di tentativi
-        retry_delay: Secondi di attesa tra i tentativi
-
-    Returns:
-        ModbusSerialClient connesso o None se fallisce
-    """
+    """Tenta di connettersi alla porta seriale con retry automatici"""
     import os
 
     for attempt in range(max_retries):
         try:
-            # Prima prova a resettare la porta se non è il primo tentativo
             if attempt > 0:
                 print(f"Tentativo {attempt + 1}/{max_retries}...")
-
-                # Prova a chiudere eventuali connessioni esistenti
                 try:
                     os.system("fuser -k /dev/ttyCAT 2>/dev/null")
                     time.sleep(0.5)
                 except:
                     pass
-
-                # Ogni 2 tentativi, prova a resettare l'USB
                 if attempt % 2 == 1:
                     reset_usb_device()
 
-            # Crea client Modbus
             client = ModbusSerialClient(
                 port='/dev/ttyCAT',
-                baudrate=115200,
-                bytesize=8,
-                parity='N',
-                stopbits=1,
-                timeout=2,
-                retries=3
+                baudrate=115200, bytesize=8, parity='N', stopbits=1,
+                timeout=2, retries=3
             )
 
             if client.connect():
@@ -304,15 +250,33 @@ def main():
     if len(sys.argv) < 2:
         print("Uso: python3 cat_window.py <comando>")
         print("Comandi disponibili:")
-        print("  apri - Sblocca e apre completamente la finestra")
-        print("  chiudi - Chiude e blocca la finestra")
-        print("  finestra <angolo> - Imposta solo l'angolo della finestra (77-135 gradi)")
-        print("  serratura <angolo> - Imposta solo l'angolo della serratura (0-90 gradi)")
-        print("  sblocca - Sblocca la finestra (serratura a 90°)")
-        print("  blocca - Blocca la finestra (serratura a 0°)")
+        print("  apri       - Sblocca e apre la finestra")
+        print("  chiudi     - Chiude e blocca la finestra")
+        print("  finestra <angolo>   - Angolo finestra (77-135)")
+        print("  serratura <angolo>  - Angolo serratura (0-90)")
+        print("  sblocca    - Sblocca la serratura (90°)")
+        print("  blocca     - Blocca la serratura (0°)")
+        print("  reset      - Reset soft PCA9685 via Modbus")
+        print("  hardreset  - Reset Arduino via DTR")
+        print("  usbreset   - Reset porta USB (più aggressivo)")
         sys.exit(1)
 
     comando = sys.argv[1].lower()
+
+    # Comandi che non richiedono connessione Modbus
+    if comando == "hardreset":
+        if not reset_arduino_dtr():
+            print("Reset Arduino fallito")
+            sys.exit(1)
+        print("Arduino resettato. Attendere qualche secondo.")
+        sys.exit(0)
+
+    if comando == "usbreset":
+        if not reset_usb_device():
+            print("Reset USB fallito")
+            sys.exit(1)
+        print("USB resettata. Attendere qualche secondo.")
+        sys.exit(0)
 
     # Connessione con retry automatici
     client = connect_with_retry(max_retries=5, retry_delay=2)
@@ -322,58 +286,59 @@ def main():
         sys.exit(1)
 
     try:
-        
-        # Gestisci i vari comandi
         if comando == "finestra" and len(sys.argv) == 3:
             try:
                 angle = float(sys.argv[2])
                 if not (77 <= angle <= 135):
                     raise ValueError("Angolo finestra fuori range (77-135)")
-                
                 if not set_window_angle(client, angle):
                     print("Operazione fallita")
                     sys.exit(1)
             except ValueError as e:
                 print(f"Errore: {e}")
                 sys.exit(1)
-                
+
         elif comando == "serratura" and len(sys.argv) == 3:
             try:
                 angle = float(sys.argv[2])
                 if not (0 <= angle <= 90):
                     raise ValueError("Angolo serratura fuori range (0-90)")
-                
                 if not set_lock_angle(client, angle):
                     print("Operazione fallita")
                     sys.exit(1)
             except ValueError as e:
                 print(f"Errore: {e}")
                 sys.exit(1)
-                
+
         elif comando == "apri":
             if not open_window(client):
                 print("Operazione apertura fallita")
                 sys.exit(1)
-                
+
         elif comando == "chiudi":
             if not close_window(client):
                 print("Operazione chiusura fallita")
                 sys.exit(1)
-                
+
         elif comando == "sblocca":
             if not unlock_window(client):
                 print("Operazione sblocco fallita")
                 sys.exit(1)
-                
+
         elif comando == "blocca":
             if not lock_window(client):
                 print("Operazione blocco fallita")
                 sys.exit(1)
-                
+
+        elif comando == "reset":
+            if not reset_pca9685(client):
+                print("Reset PCA9685 fallito")
+                sys.exit(1)
+
         else:
             print(f"Comando non riconosciuto: {comando}")
             sys.exit(1)
-            
+
     except Exception as e:
         print(f"Errore: {e}")
         sys.exit(1)

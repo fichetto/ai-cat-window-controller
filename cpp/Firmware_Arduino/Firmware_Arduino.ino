@@ -72,10 +72,12 @@ void setup() {
   // 1: angolo attuale finestra (x10)
   // 2: angolo richiesto serratura (x10)
   // 3: angolo attuale serratura (x10)
+  // 4: reset PCA9685 (scrivere 1 per resettare)
   mb.addHreg(0, WINDOW_MIN_ANGLE * 10);
   mb.addHreg(1, WINDOW_MIN_ANGLE * 10);
   mb.addHreg(2, LOCK_MIN_ANGLE * 10);
   mb.addHreg(3, LOCK_MIN_ANGLE * 10);
+  mb.addHreg(4, 0);
 
   // Setup PCA9685
   pwm.begin();
@@ -138,18 +140,43 @@ void updateLockServo() {
   mb.Hreg(3, (uint16_t)(currentLockAngle * 10));
 }
 
+void resetPCA9685() {
+  // Spegni completamente le uscite PWM ai servo
+  // (fully-off: bit 12 del registro ON = output disabilitato)
+  pwm.setPWM(WINDOW_SERVO_CHANNEL, 0, 4096);  // output OFF
+  pwm.setPWM(LOCK_SERVO_CHANNEL, 0, 4096);    // output OFF
+
+  // Attendi 10 secondi senza segnale - il servo potrebbe uscire dalla protezione
+  delay(10000);
+
+  // Reinizializza PCA9685
+  pwm.begin();
+  pwm.setPWMFreq(50);
+  delay(100);
+
+  // Riapplica le posizioni attuali ai servo
+  pwm.setPWM(WINDOW_SERVO_CHANNEL, 0, windowAngleToPulse(currentWindowAngle));
+  pwm.setPWM(LOCK_SERVO_CHANNEL, 0, lockAngleToPulse(currentLockAngle));
+}
+
 void loop() {
   // Gestione Modbus
   mb.task();
-  
+
+  // Controlla se è stato richiesto un reset PCA9685
+  if (mb.Hreg(4) != 0) {
+    resetPCA9685();
+    mb.Hreg(4, 0);  // Resetta il flag
+  }
+
   // Aggiorna posizione servo ogni STEP_DELAY millisecondi
   if (millis() - lastStepTime >= STEP_DELAY) {
     lastStepTime = millis();
-    
+
     // Aggiorna entrambi i servo
     updateWindowServo();
     updateLockServo();
   }
-  
+
   yield();
 }

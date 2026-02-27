@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Script wrapper per il servizio systemd cat-window
-# Prepara l'ambiente e lancia l'applicazione
+# Script wrapper per il servizio systemd tapo-detection
+# Prepara l'ambiente e lancia l'applicazione multi-camera
 
 set -e
 
@@ -34,9 +34,13 @@ if [ -z "$device_arch" ]; then
 fi
 export DEVICE_ARCHITECTURE="$device_arch"
 
+echo "=========================================="
+echo "Tapo Multi-Camera Detection Service"
+echo "=========================================="
 echo "Ambiente configurato:"
 echo "  TAPPAS_POST_PROC_DIR=$TAPPAS_POST_PROC_DIR"
 echo "  DEVICE_ARCHITECTURE=$DEVICE_ARCHITECTURE"
+echo "=========================================="
 
-# Avvia applicazione (headless_detection con supporto RTSP disabilitato per ora)
-exec "$VENV_DIR/bin/python" "$PIPELINES_DIR/headless_detection.py" --input /dev/video0
+# Avvia applicazione multi-camera
+exec "$VENV_DIR/bin/python" "$PIPELINES_DIR/tapo_detection.py"
