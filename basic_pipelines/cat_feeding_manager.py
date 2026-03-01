@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Optional, Callable, Dict, Any
 
 import paho.mqtt.client as mqtt
+import requests
 
 from cat_database import CatDatabase
 
@@ -79,6 +80,7 @@ class CatFeedingManager:
         self.current_cat = None
         self.waiting_for_photo = False
         self.pending_reading_id = None
+        self.esp32_ip = None  # Populated from ESP32 status messages
 
         # Modalità
         self.rules_enabled = False  # False = eroga sempre, True = applica regole
@@ -173,83 +175,50 @@ class CatFeedingManager:
             logger.error(f"Error processing MQTT message: {e}")
 
     def _handle_weight(self, payload: Dict):
-        """Gestisce una pesata stabile."""
+        """Gestisce una pesata stabile (log only, la logica è in _handle_cat_detected)."""
         weight = payload.get('weight', 0)
-        timestamp = payload.get('timestamp', datetime.now().isoformat())
-
-        logger.info(f"Weight received: {weight}kg")
+        logger.info(f"Stable weight received: {weight}kg")
         self.current_weight = weight
-
-        # Identifica il gatto
-        cat = self.db.identify_cat_by_weight(weight)
-
-        if cat:
-            self.current_cat = cat
-            logger.info(f"Cat identified: {cat['name']} (confidence: {cat['confidence']})")
-
-            # Richiedi foto per conferma e training
-            self._request_photo()
-
-            # Decidi se erogare
-            should_dispense = self._should_dispense(cat)
-
-            # Registra pesata
-            reading_id = self.db.add_weight_reading(
-                weight=weight,
-                cat_id=cat['id'],
-                confidence=cat['confidence'],
-                food_dispensed=should_dispense
-            )
-            self.pending_reading_id = reading_id
-
-            # Invia comando erogazione
-            self._send_dispense_command(should_dispense)
-
-            # Notifica Telegram
-            if self.telegram_callback:
-                msg = f"🐱 {cat['name']} sulla bilancia\n"
-                msg += f"• Peso: {weight}kg\n"
-                msg += f"• Confidenza: {cat['confidence']*100:.0f}%\n"
-                msg += f"• Pasti oggi: {self.db.get_feeding_count_today(cat['id'])}\n"
-                msg += f"• Cibo: {'✅ Erogato' if should_dispense else '❌ Non erogato'}"
-                self.telegram_callback(msg)
-
-        else:
-            # Gatto non riconosciuto
-            self.current_cat = None
-            logger.info(f"Unknown cat with weight {weight}kg")
-
-            # Richiedi foto per identificazione manuale
-            self._request_photo()
-
-            # Registra pesata non identificata
-            reading_id = self.db.add_weight_reading(weight=weight)
-            self.pending_reading_id = reading_id
-
-            # In fase di apprendimento, eroga sempre
-            if not self.rules_enabled:
-                self._send_dispense_command(True)
-                self.db.add_weight_reading(weight=weight, food_dispensed=True)
-
-                if self.telegram_callback:
-                    msg = f"❓ Gatto sconosciuto sulla bilancia\n"
-                    msg += f"• Peso: {weight}kg\n"
-                    msg += f"• Cibo: ✅ Erogato (modalità apprendimento)\n"
-                    msg += f"• Rispondi con il nome per identificarlo"
-                    self.telegram_callback(msg)
-            else:
-                self._send_dispense_command(False)
-
-                if self.telegram_callback:
-                    msg = f"⚠️ Gatto NON riconosciuto!\n"
-                    msg += f"• Peso: {weight}kg\n"
-                    msg += f"• Cibo: ❌ Non erogato"
-                    self.telegram_callback(msg)
 
     def _handle_cat_detected(self, payload: Dict):
         """Gestisce evento: gatto rilevato sulla bilancia."""
-        logger.info("Cat detected on scale")
-        self.db.log_event('detection', 'esp32', details={'event': 'cat_on_scale'})
+        weight = payload.get('weight', 0)
+        logger.info(f"Cat detected on scale: {weight}kg")
+        self.current_weight = weight
+        self.db.log_event('detection', 'esp32', details={'event': 'cat_on_scale', 'weight': weight})
+
+        # Identifica gatto e cattura foto
+        cat = self.db.identify_cat_by_weight(weight)
+        self.current_cat = cat
+
+        # Scarica foto dalla ESP32
+        photo_path = self._fetch_photo_from_esp32(
+            cat_id=cat['id'] if cat else None,
+            weight=weight
+        )
+
+        # Registra pesata
+        reading_id = self.db.add_weight_reading(
+            weight=weight,
+            cat_id=cat['id'] if cat else None,
+            confidence=cat['confidence'] if cat else None,
+            food_dispensed=not self.rules_enabled
+        )
+        self.pending_reading_id = reading_id
+
+        # Notifica Telegram con foto
+        if cat:
+            msg = f"🐱 {cat['name']} sulla bilancia\n"
+            msg += f"• Peso: {weight}kg\n"
+            msg += f"• Pasti oggi: {self.db.get_feeding_count_today(cat['id'])}"
+        else:
+            msg = f"❓ Gatto sconosciuto sulla bilancia\n"
+            msg += f"• Peso: {weight}kg"
+
+        if photo_path and self.telegram_photo_callback:
+            self.telegram_photo_callback(photo_path, msg)
+        elif self.telegram_callback:
+            self.telegram_callback(msg)
 
     def _handle_cat_left(self, payload: Dict):
         """Gestisce evento: gatto lascia la bilancia."""
@@ -259,14 +228,20 @@ class CatFeedingManager:
         self.db.log_event('detection', 'esp32', details={'event': 'cat_left_scale'})
 
     def _handle_photo(self, payload: Dict):
-        """Gestisce ricezione foto da ESP32."""
+        """Gestisce ricezione foto da ESP32 (URL o base64)."""
         timestamp = payload.get('timestamp', datetime.now().isoformat())
-        image_base64 = payload.get('image_base64', '')
         weight = payload.get('weight', self.current_weight)
         cat_id = payload.get('cat_id', self.current_cat['id'] if self.current_cat else None)
 
+        # Nuovo formato: ESP32 invia URL per fetch HTTP
+        photo_url = payload.get('url', '')
+        if photo_url:
+            logger.info(f"Photo URL received: {photo_url} (photo already fetched in _handle_cat_detected)")
+            return
+
+        image_base64 = payload.get('image_base64', '')
         if not image_base64:
-            logger.warning("Empty photo received")
+            logger.warning("Empty photo received (no url or base64)")
             return
 
         # Decodifica e salva foto
@@ -338,6 +313,8 @@ class CatFeedingManager:
 
     def _handle_esp32_status(self, payload: Dict):
         """Gestisce heartbeat/status ESP32."""
+        if 'ip' in payload:
+            self.esp32_ip = payload['ip']
         logger.debug(f"ESP32 status: {payload}")
 
     def _should_dispense(self, cat: Dict) -> bool:
@@ -371,6 +348,50 @@ class CatFeedingManager:
         payload = {"request": True, "timestamp": datetime.now().isoformat()}
         self.mqtt_client.publish(self.TOPIC_PHOTO_REQUEST, json.dumps(payload))
         logger.info("Photo requested from ESP32")
+
+    def _fetch_photo_from_esp32(self, cat_id: str = None, weight: float = 0) -> Optional[str]:
+        """Scarica foto dalla ESP32 via HTTP e la salva su disco."""
+        if not self.esp32_ip:
+            logger.warning("ESP32 IP not known yet, cannot fetch photo")
+            return None
+
+        url = f"http://{self.esp32_ip}/capture"
+        try:
+            resp = requests.get(url, timeout=5)
+            if resp.status_code != 200:
+                logger.error(f"ESP32 photo request failed: {resp.status_code}")
+                return None
+
+            # Genera path
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            if cat_id:
+                cat_dir = os.path.join(self.photo_dir, cat_id)
+                os.makedirs(cat_dir, exist_ok=True)
+                photo_path = os.path.join(cat_dir, f"{cat_id}_{ts}.jpg")
+            else:
+                unknown_dir = os.path.join(self.photo_dir, "unknown")
+                os.makedirs(unknown_dir, exist_ok=True)
+                photo_path = os.path.join(unknown_dir, f"unknown_{ts}_{weight:.2f}kg.jpg")
+
+            with open(photo_path, 'wb') as f:
+                f.write(resp.content)
+
+            logger.info(f"Photo fetched and saved: {photo_path} ({len(resp.content)} bytes)")
+
+            # Registra nel database
+            self.db.add_cat_photo(
+                photo_path=photo_path,
+                source='feeder',
+                cat_id=cat_id,
+                weight=weight,
+                verified=(cat_id is not None)
+            )
+
+            return photo_path
+
+        except requests.RequestException as e:
+            logger.error(f"Failed to fetch photo from ESP32: {e}")
+            return None
 
     def _send_dispense_command(self, dispense: bool, doses: int = 1):
         """Invia comando di erogazione alla ESP32."""

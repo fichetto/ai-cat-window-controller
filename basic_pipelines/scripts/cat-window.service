@@ -14,7 +14,7 @@ WorkingDirectory=/home/pi/hailo-rpi5-examples
 ExecStart=/home/pi/hailo-rpi5-examples/basic_pipelines/scripts/cat-window-service.sh
 
 # Restart policy
-Restart=on-failure
+Restart=always
 RestartSec=10
 
 # Limite restart: max 10 in 1 ora (3600 secondi)

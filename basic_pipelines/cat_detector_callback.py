@@ -56,6 +56,9 @@ class HeadlessCatDetectorCallback(app_callback_class):
         self.capture_cooldown = timedelta(seconds=30)
         self.capture_confidence_threshold = 0.8  # Alzata per ridurre falsi positivi
 
+        # Tracking transizione manual → auto (per reset timer)
+        self._was_manual_mode = False
+
         # Tracking movimento gatto (per rilevare entrata/uscita)
         self.last_single_cat_position = None  # 'left' o 'right' - ultima posizione con 1 solo gatto
         self.last_single_cat_time = None  # Quando è stata vista l'ultima posizione
@@ -211,8 +214,18 @@ class HeadlessCatDetectorCallback(app_callback_class):
             best_cat (dict): Info sul gatto con confidence maggiore (opzionale)
         """
         # Verifica se il controllo automatico è abilitato
-        if not self.window_controller.auto_control_enabled():
+        current_manual = self.window_controller.manual_mode
+        if current_manual:
+            self._was_manual_mode = True
             return
+
+        # Se appena passato da manuale ad automatico, resetta i timer
+        # per evitare chiusura immediata basata su timer stale
+        if self._was_manual_mode:
+            self._was_manual_mode = False
+            self.last_cat_time = None
+            self.last_no_cat_time = None
+            logger.info("Auto mode re-enabled - detection timers reset")
 
         current_threshold = self.get_current_confidence_threshold()
 
