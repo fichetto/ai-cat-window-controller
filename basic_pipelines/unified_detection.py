@@ -334,7 +334,7 @@ class UnifiedDetectorApp:
             else:
                 # RTSP camera
                 camera_name = self.rtsp_cameras[source_idx - 1]['name'] if self.rtsp_cameras else "Unknown"
-                rtsp_detections.append((det, camera_name))
+                rtsp_detections.append((det, camera_name, source_idx))
 
         # Processa rilevamenti USB (logica cat window esistente)
         self._process_usb_detections(usb_detections, frame, current_time)
@@ -376,7 +376,7 @@ class UnifiedDetectorApp:
 
     def _process_rtsp_detections(self, detections, frame, current_time):
         """Processa rilevamenti dalle RTSP cameras."""
-        for det, camera_name in detections:
+        for det, camera_name, source_idx in detections:
             label = det.get_label()
             confidence = det.get_confidence()
 
@@ -396,7 +396,10 @@ class UnifiedDetectorApp:
             # Salva immagine
             image_path = None
             if frame is not None and confidence >= 0.8:
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                frame_h, frame_w = frame.shape[:2]
+                x_start = int(source_idx * frame_w / self.num_sources)
+                x_end = int((source_idx + 1) * frame_w / self.num_sources)
+                frame_bgr = cv2.cvtColor(frame[:, x_start:x_end], cv2.COLOR_RGB2BGR)
                 ts = current_time.strftime("%Y%m%d_%H%M%S")
                 cam_dir = os.path.join(self.rtsp_save_dir, camera_name.lower().replace(' ', '_'))
                 os.makedirs(cam_dir, exist_ok=True)
