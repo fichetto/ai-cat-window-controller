@@ -1,0 +1,1 @@
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", ATTRS{product}=="USB Serial", SYMLINK+="ttyCAT", RUN+="/bin/stty -F /dev/$kernel -hupcl"
