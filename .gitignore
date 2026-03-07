@@ -195,6 +195,13 @@ _pipelines
 # Dataset images (too large for git)
 dataset/
 
+# Runtime photo archives
+basic_pipelines/cat_feeder_photos/
+
+# Screenshots nella root
+/Screenshot*.png
+/Screenshot*.jpg
+
 # IDE
 .vscode/
 .idea/
