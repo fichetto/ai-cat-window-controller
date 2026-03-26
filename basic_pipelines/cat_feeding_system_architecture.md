@@ -346,6 +346,46 @@ sequenceDiagram
     R->>T: "Minu registrato: 3.2kg"
 ```
 
+### 6.4 Controllo Automatico Finestra
+
+**Logica di apertura:**
+1. Gatto rilevato a sinistra (center_x < 0.5), singolo, confidenza >= 0.8
+2. Deve restare per **10 secondi** (`required_detection_time`)
+3. Nessun gatto a destra negli ultimi 5 secondi (evita apertura durante transito)
+4. Finestra si apre (servo a 120°, serratura sbloccata)
+
+**Logica di chiusura:**
+1. Nessun gatto nel 70% sinistro del frame (`cat_in_close_zone`)
+2. Timer di assenza: **3 secondi** (`required_no_detection_time`)
+3. Estensione +3s se `/faientrare` usato negli ultimi 30 secondi
+4. Finestra si chiude (servo a 77°, serratura bloccata)
+
+**Cooldown progressivo anti-oscillazione:**
+
+Quando la finestra aperta copre il gatto dalla visuale della camera, si crea un ciclo:
+apri (gatto visibile) → gatto coperto → chiudi (gatto non visibile) → gatto visibile → apri...
+
+Per prevenire questo loop:
+- Ogni ciclo automatico apri→chiudi breve (<60s) incrementa un contatore
+- Dopo ogni ciclo si applica un cooldown crescente prima della prossima apertura automatica:
+
+| Ciclo | Cooldown |
+|-------|----------|
+| 1     | 30s      |
+| 2     | 60s      |
+| 3     | 120s     |
+| 4+    | 240s     |
+
+Formula: `min(30 * 2^(n-1), 240)` secondi
+
+**Reset del cooldown:**
+- 2+ gatti rilevati con almeno uno nel 70% sinistro (situazione diversa)
+- 10 minuti di inattività
+- Uscita da modalità manuale
+- Finestra rimasta aperta >60s (uso genuino, il gatto è passato)
+
+**Non bloccato dal cooldown:** comandi manuali e `/faientrare`
+
 ## 7. Considerazioni di Sicurezza
 
 ### 7.1 Rete

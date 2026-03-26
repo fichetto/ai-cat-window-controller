@@ -65,6 +65,16 @@ class HeadlessCatDetectorCallback(app_callback_class):
         self.window_opened_for_entry = False  # True se finestra aperta con /faientrare
         self.window_opened_for_exit = False  # True se finestra aperta automaticamente (gatto dentro vuole uscire)
 
+        # Cooldown progressivo anti-oscillazione (Waffle che guarda dalla finestra)
+        self.auto_cycle_count = 0
+        self.last_auto_open_time = None
+        self.last_auto_close_time = None
+        self.cooldown_until = None
+        self.cooldown_base = 30          # 30s, 60s, 120s, 240s...
+        self.cooldown_multiplier = 2
+        self.cooldown_max = 240          # Cap a 4 minuti
+        self.inactivity_reset = timedelta(minutes=10)
+
         logger.info("Headless Cat Detector Callback initialized with adaptive thresholds")
 
     def ensure_save_directory(self):
@@ -202,7 +212,24 @@ class HeadlessCatDetectorCallback(app_callback_class):
 
         return None
 
-    def process_cat_detection(self, frame, max_confidence, should_open_window, current_time, best_cat=None):
+    def _compute_auto_open_cooldown(self):
+        """Calcola il cooldown progressivo basato sul numero di cicli."""
+        if self.auto_cycle_count <= 0:
+            return timedelta(seconds=0)
+        seconds = min(
+            self.cooldown_base * (self.cooldown_multiplier ** (self.auto_cycle_count - 1)),
+            self.cooldown_max
+        )
+        return timedelta(seconds=seconds)
+
+    def _reset_cooldown(self, reason=""):
+        """Resetta il cooldown progressivo."""
+        if self.auto_cycle_count > 0:
+            logger.info(f"Cooldown progressivo RESET (era ciclo {self.auto_cycle_count}). Motivo: {reason}")
+        self.auto_cycle_count = 0
+        self.cooldown_until = None
+
+    def process_cat_detection(self, frame, max_confidence, should_open_window, current_time, best_cat=None, cat_in_close_zone=False, total_cats=0):
         """
         Elabora il rilevamento del gatto e gestisce lo stato della finestra.
 
@@ -212,6 +239,8 @@ class HeadlessCatDetectorCallback(app_callback_class):
             should_open_window (bool): Se True, aprire la finestra (gatto a sinistra, solo uno)
             current_time (datetime): Timestamp corrente
             best_cat (dict): Info sul gatto con confidence maggiore (opzionale)
+            cat_in_close_zone (bool): Se True, c'è un gatto entro il 70% sinistro del frame
+            total_cats (int): Numero totale di gatti rilevati nel frame
         """
         # Verifica se il controllo automatico è abilitato
         current_manual = self.window_controller.manual_mode
@@ -225,7 +254,17 @@ class HeadlessCatDetectorCallback(app_callback_class):
             self._was_manual_mode = False
             self.last_cat_time = None
             self.last_no_cat_time = None
+            self._reset_cooldown("uscita da modalità manuale")
             logger.info("Auto mode re-enabled - detection timers reset")
+
+        # Reset cooldown per inattività (10 minuti senza cicli)
+        if (self.last_auto_close_time is not None and
+                current_time - self.last_auto_close_time > self.inactivity_reset):
+            self._reset_cooldown("inattività >10 minuti")
+
+        # Reset cooldown se ci sono 2+ gatti con almeno uno nella zona sinistra
+        if total_cats >= 2 and cat_in_close_zone:
+            self._reset_cooldown("secondo gatto rilevato a sinistra")
 
         current_threshold = self.get_current_confidence_threshold()
 
@@ -238,7 +277,14 @@ class HeadlessCatDetectorCallback(app_callback_class):
 
             cat_present_time = current_time - self.last_cat_time
             if cat_present_time >= self.required_detection_time:
+                # Cooldown progressivo anti-oscillazione
+                if self.cooldown_until and current_time < self.cooldown_until:
+                    remaining = int((self.cooldown_until - current_time).total_seconds())
+                    logger.info(f"Cooldown progressivo attivo: {remaining}s rimanenti (ciclo {self.auto_cycle_count})")
+                    return
+
                 if self.window_controller.set_window_position(True, manual=False):
+                    self.last_auto_open_time = current_time
                     # Crea messaggio con info posizione
                     message = "🐱 Gatto a sinistra (solo), apro la finestra"
                     if best_cat:
@@ -251,9 +297,16 @@ class HeadlessCatDetectorCallback(app_callback_class):
                         self.telegram.send_window_status(True, message)
         else:
             # Nessun gatto a sinistra (o multipli gatti) - chiudi finestra
+            # Ma solo se non c'è nessun gatto nella zona di chiusura (entro 60% sinistro)
+            if cat_in_close_zone:
+                # C'è ancora un gatto nella zona di chiusura, non avviare il timer
+                self.last_no_cat_time = None
+                logger.debug("Cat still in close zone (<70%), not starting close timer")
+                return
+
             if self.last_no_cat_time is None:
                 self.last_no_cat_time = current_time
-                logger.info("No cat LEFT detected (or multiple cats) - starting close timer " +
+                logger.info("No cat in close zone (<70%) - starting close timer " +
                            f"(using threshold: {current_threshold:.2f})")
             self.last_cat_time = None
 
@@ -269,6 +322,30 @@ class HeadlessCatDetectorCallback(app_callback_class):
                 close_delay = self.required_no_detection_time + self.window_controller.get_close_delay_extension()
                 if cat_absent_time >= close_delay:
                     if self.window_controller.set_window_position(False):
+                        self.last_auto_close_time = current_time
+
+                        # Rileva ciclo di oscillazione automatico
+                        if self.last_auto_open_time is not None:
+                            time_open = current_time - self.last_auto_open_time
+                            if time_open < timedelta(seconds=60):
+                                # Ciclo breve = oscillazione (Waffle)
+                                self.auto_cycle_count += 1
+                                cooldown = self._compute_auto_open_cooldown()
+                                self.cooldown_until = current_time + cooldown
+                                logger.info(f"Ciclo auto #{self.auto_cycle_count} "
+                                           f"(aperta {time_open.seconds}s). "
+                                           f"Cooldown: {cooldown.seconds}s")
+                                if self.telegram:
+                                    self.telegram.send_message(
+                                        f"🔄 Ciclo auto apertura→chiusura #{self.auto_cycle_count} "
+                                        f"(finestra aperta {time_open.seconds}s).\n"
+                                        f"⏳ Cooldown: {int(cooldown.total_seconds())}s prima della prossima apertura automatica."
+                                    )
+                            else:
+                                # Finestra aperta a lungo = uso genuino
+                                self._reset_cooldown("finestra aperta >60s (uso genuino)")
+                            self.last_auto_open_time = None
+
                         message = f"Nessun gatto a sinistra da {cat_absent_time.seconds}s, chiudo finestra"
                         logger.info(f"Closing window - {message}")
                         if self.telegram:

@@ -612,7 +612,9 @@ def _process_usb_frame(buffer, frame, user_data, current_time):
     no_recent_right = time_since_right > timedelta(seconds=5)
 
     should_open_window = filtered_cat_left and no_recent_right
-    user_data.process_cat_detection(frame, max_confidence, should_open_window, current_time, best_cat)
+    # Gatti nella zona di chiusura (entro il 60% sinistro) - la finestra non può chiudersi se presenti
+    cat_in_close_zone = any(c['center_x'] < 0.7 for c in cats_info)
+    user_data.process_cat_detection(frame, max_confidence, should_open_window, current_time, best_cat, cat_in_close_zone, total_cats=total_cats)
 
     # Tracking movimento
     if total_cats == 1 and best_cat:

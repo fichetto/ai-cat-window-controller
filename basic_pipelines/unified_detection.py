@@ -372,7 +372,10 @@ class UnifiedDetectorApp:
         filtered_cat_left = self.user_data.update_detection_filter(cat_left, current_time)
         should_open = filtered_cat_left
 
-        self.user_data.process_cat_detection(frame, max_confidence, should_open, current_time, best_cat)
+        # Gatti nella zona di chiusura (entro il 70% sinistro) - la finestra non può chiudersi se presenti
+        cat_in_close_zone = any(c['center_x'] < 0.7 for c in cats_info)
+        total_cats = len(cats_info)
+        self.user_data.process_cat_detection(frame, max_confidence, should_open, current_time, best_cat, cat_in_close_zone, total_cats=total_cats)
 
     def _process_rtsp_detections(self, detections, frame, current_time):
         """Processa rilevamenti dalle RTSP cameras."""
