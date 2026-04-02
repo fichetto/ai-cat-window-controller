@@ -148,7 +148,52 @@ sysctl kernel.hung_task_panic kernel.panic
 
 ---
 
-## Fase 5: MQTT Broker (Mosquitto)
+## Fase 5: VPN (OpenVPN)
+
+Il sistema utilizza due tunnel VPN in split-tunnel:
+- **tun0** — VPN di lavoro (configurazione preesistente in `/etc/openvpn/client/`)
+- **tun1** — VPN principale verso `ufficio-tecnocons.dyndns.org` (rete `10.8.0.0/24`)
+
+### 5a. Installa OpenVPN (se non presente)
+```bash
+sudo apt install openvpn
+```
+
+### 5b. Installa configurazione raspa
+
+Il file `.ovpn` contiene certificati e chiave privata, quindi **non è versionato** nel repository.
+Deve essere fornito separatamente (es. `raspa.hailo.ovpn`).
+
+```bash
+# Copia il file .ovpn come configurazione client (modifica dev tun → dev tun1)
+sudo cp raspa.hailo.ovpn /etc/openvpn/client/raspa.conf
+sudo sed -i 's/^dev tun$/dev tun1/' /etc/openvpn/client/raspa.conf
+
+# Crea il file credenziali (username e password su righe separate)
+sudo nano /etc/openvpn/pass.txt
+sudo chmod 600 /etc/openvpn/pass.txt
+
+# Abilita e avvia
+sudo systemctl enable openvpn-client@raspa
+sudo systemctl start openvpn-client@raspa
+```
+
+### Verifica
+```bash
+systemctl status openvpn-client@raspa
+ip addr show tun1
+# Deve mostrare un indirizzo 10.8.0.x/24
+ping -c 2 10.8.0.1
+```
+
+### Note
+- La configurazione usa `dev tun1` per non confliggere con tun0
+- Split-tunnel: solo il traffico verso `10.8.0.0/24` passa dalla VPN
+- Le credenziali sono in `/etc/openvpn/pass.txt` (condiviso tra i tunnel)
+
+---
+
+## Fase 6: MQTT Broker (Mosquitto)
 
 Necessario per l'integrazione con il sistema alimentazione ESP32.
 
@@ -174,9 +219,9 @@ mosquitto_pub -t "test/topic" -m "hello"
 
 ---
 
-## Fase 6: Configurazione Applicazione
+## Fase 7: Configurazione Applicazione
 
-### 6a. File di configurazione
+### 7a. File di configurazione
 ```bash
 cd /home/pi/hailo-rpi5-examples/basic_pipelines
 
@@ -193,7 +238,7 @@ Parametri da configurare in `cat_config.py`:
 | `WINDOW_CLOSED_ANGLE` | Angolo servo finestra chiusa | `77` |
 | `WINDOW_OPEN_ANGLE` | Angolo servo finestra aperta | `130` |
 
-### 6b. Creazione bot Telegram
+### 7b. Creazione bot Telegram
 1. Apri [@BotFather](https://t.me/botfather) su Telegram
 2. Invia `/newbot` e segui le istruzioni
 3. Salva il token ricevuto
@@ -205,9 +250,9 @@ Parametri da configurare in `cat_config.py`:
 
 ---
 
-## Fase 7: Firmware Arduino
+## Fase 8: Firmware Arduino
 
-### 7a. Flash firmware
+### 8a. Flash firmware
 Il firmware per l'ATMEGA2560 si trova in [cpp/Firmware_Arduino/](cpp/Firmware_Arduino/).
 
 Con Arduino IDE:
@@ -222,7 +267,7 @@ avrdude -p m2560 -c wiring -P /dev/ttyCAT -b 115200 \
   -U flash:w:20250118_ATMEGA2560SERVO_FINESTRA.ino.hex:i
 ```
 
-### 7b. Verifica comunicazione Modbus
+### 8b. Verifica comunicazione Modbus
 ```bash
 source venv_hailo_rpi5_examples/bin/activate
 python basic_pipelines/cat_window.py status
@@ -231,7 +276,7 @@ python basic_pipelines/cat_window.py status
 
 ---
 
-## Fase 8: Hailo Health Monitor (cron)
+## Fase 9: Hailo Health Monitor (cron)
 
 Lo script monitora temperatura Hailo e stato del processo ogni 5 minuti.
 
@@ -257,7 +302,7 @@ cat /var/log/hailo-monitor.log
 
 ---
 
-## Fase 9: Servizio systemd
+## Fase 10: Servizio systemd
 
 Il servizio gestisce l'avvio automatico e il restart dell'applicazione.
 
@@ -285,7 +330,7 @@ journalctl -u cat-window -f
 
 ---
 
-## Fase 10: Verifica Completa
+## Fase 11: Verifica Completa
 
 ### Checklist post-installazione
 
@@ -305,19 +350,23 @@ systemctl is-active cat-window
 # 5. Watchdog attivo
 systemctl is-active watchdog
 
-# 6. MQTT funzionante
+# 6. VPN raspa attiva
+systemctl is-active openvpn-client@raspa
+ip addr show tun1
+
+# 7. MQTT funzionante
 systemctl is-active mosquitto
 
-# 7. Cron monitor attivo
+# 8. Cron monitor attivo
 crontab -l | grep hailo
 
-# 8. Temperatura Hailo OK
+# 9. Temperatura Hailo OK
 cat /sys/class/hwmon/hwmon*/temp*_input | awk '{print $1/1000 "C"}'
 
-# 9. Log applicazione
+# 10. Log applicazione
 journalctl -u cat-window --since "5 min ago" --no-pager | tail -5
 
-# 10. Bot Telegram risponde
+# 11. Bot Telegram risponde
 # Invia /status al bot su Telegram
 ```
 
@@ -328,6 +377,11 @@ journalctl -u cat-window --since "5 min ago" --no-pager | tail -5
 Riepilogo di tutti i file che vengono installati fuori dal repository:
 
 ```
+/etc/openvpn/client/
+  raspa.conf                    ← da raspa.hailo.ovpn (NON versionato, contiene chiavi)
+/etc/openvpn/
+  pass.txt                      ← credenziali VPN (creato manualmente, chmod 600)
+
 /etc/systemd/system/
   cat-window.service            ← basic_pipelines/scripts/cat-window.service
 

@@ -76,9 +76,48 @@ phase_watchdog() {
     ok "Servizio watchdog abilitato e avviato"
 }
 
-# Fase 5: Mosquitto MQTT
+# Fase 5: OpenVPN (raspa - tun1)
+phase_vpn() {
+    phase_header 5 "VPN (OpenVPN - raspa tun1)"
+
+    apt-get install -y openvpn > /dev/null 2>&1
+    ok "OpenVPN installato"
+
+    if [ -f /etc/openvpn/client/raspa.conf ]; then
+        ok "raspa.conf gia' presente in /etc/openvpn/client/"
+    else
+        if [ -f /home/pi/raspa.hailo.ovpn ]; then
+            cp /home/pi/raspa.hailo.ovpn /etc/openvpn/client/raspa.conf
+            sed -i 's/^dev tun$/dev tun1/' /etc/openvpn/client/raspa.conf
+            ok "raspa.conf installato (dev tun1)"
+        else
+            warn "File raspa.hailo.ovpn non trovato in /home/pi/"
+            info "  Copia il file .ovpn e riesegui: sudo ./deploy.sh --phase 5"
+            return
+        fi
+    fi
+
+    if [ ! -f /etc/openvpn/pass.txt ]; then
+        warn "/etc/openvpn/pass.txt non trovato - credenziali VPN necessarie"
+        info "  Crea il file con username e password su righe separate"
+        return
+    fi
+
+    systemctl enable openvpn-client@raspa > /dev/null 2>&1
+    systemctl start openvpn-client@raspa 2>/dev/null || true
+    sleep 3
+
+    if ip link show tun1 > /dev/null 2>&1; then
+        local ip=$(ip -4 addr show tun1 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+        ok "VPN raspa attiva: tun1 = $ip"
+    else
+        warn "tun1 non attivo - controlla: journalctl -u openvpn-client@raspa"
+    fi
+}
+
+# Fase 6: Mosquitto MQTT
 phase_mosquitto() {
-    phase_header 5 "MQTT Broker (Mosquitto)"
+    phase_header 6 "MQTT Broker (Mosquitto)"
 
     apt-get install -y mosquitto mosquitto-clients > /dev/null 2>&1
     ok "Mosquitto installato"
@@ -91,9 +130,9 @@ phase_mosquitto() {
     ok "Mosquitto abilitato e avviato"
 }
 
-# Fase 6: Ambiente Python (da eseguire come user pi)
+# Fase 7: Ambiente Python (da eseguire come user pi)
 phase_python() {
-    phase_header 6 "Ambiente Python"
+    phase_header 7 "Ambiente Python"
 
     if [ ! -d "$VENV_DIR" ]; then
         sudo -u pi python3 -m venv "$VENV_DIR"
@@ -113,9 +152,9 @@ phase_python() {
     fi
 }
 
-# Fase 7: Configurazione cat_config.py
+# Fase 8: Configurazione cat_config.py
 phase_config() {
-    phase_header 7 "Configurazione Applicazione"
+    phase_header 8 "Configurazione Applicazione"
 
     local config="$PROJECT_DIR/basic_pipelines/cat_config.py"
     local example="$PROJECT_DIR/basic_pipelines/cat_config.example.py"
@@ -133,9 +172,9 @@ phase_config() {
     fi
 }
 
-# Fase 8: Hailo monitor cron
+# Fase 9: Hailo monitor cron
 phase_monitor() {
-    phase_header 8 "Hailo Health Monitor (cron)"
+    phase_header 9 "Hailo Health Monitor (cron)"
 
     cp "$PROJECT_DIR/basic_pipelines/scripts/hailo-monitor.sh" /home/pi/hailo-monitor.sh
     chmod +x /home/pi/hailo-monitor.sh
@@ -155,9 +194,9 @@ phase_monitor() {
     fi
 }
 
-# Fase 9: Servizio systemd
+# Fase 10: Servizio systemd
 phase_systemd() {
-    phase_header 9 "Servizio systemd"
+    phase_header 10 "Servizio systemd"
 
     cp "$PROJECT_DIR/basic_pipelines/scripts/cat-window.service" /etc/systemd/system/
     ok "Service file copiato"
@@ -182,9 +221,9 @@ phase_systemd() {
     fi
 }
 
-# Fase 10: Verifica finale
+# Fase 11: Verifica finale
 phase_verify() {
-    phase_header 10 "Verifica Completa"
+    phase_header 11 "Verifica Completa"
 
     echo ""
     # Hailo
@@ -206,6 +245,13 @@ phase_verify() {
         ok "Arduino (/dev/ttyCAT): collegato"
     else
         warn "Arduino (/dev/ttyCAT): non collegato"
+    fi
+
+    # VPN
+    if ip link show tun1 > /dev/null 2>&1; then
+        ok "VPN raspa (tun1): attiva"
+    else
+        warn "VPN raspa (tun1): non attiva"
     fi
 
     # Servizi
@@ -242,7 +288,7 @@ phase_verify() {
     echo ""
     info "Prossimi passi:"
     info "  1. Verifica cat_config.py con le credenziali Telegram"
-    info "  2. Flash firmware Arduino (vedi DEPLOYMENT.md Fase 7)"
+    info "  2. Flash firmware Arduino (vedi DEPLOYMENT.md Fase 8)"
     info "  3. Invia /status al bot Telegram per verificare"
     info "  4. Controlla i log: journalctl -u cat-window -f"
 }
@@ -261,17 +307,19 @@ main() {
         case "$2" in
             3)  phase_udev ;;
             4)  phase_watchdog ;;
-            5)  phase_mosquitto ;;
-            6)  phase_python ;;
-            7)  phase_config ;;
-            8)  phase_monitor ;;
-            9)  phase_systemd ;;
-            10) phase_verify ;;
-            *)  err "Fase non valida: $2 (disponibili: 3-10)"; exit 1 ;;
+            5)  phase_vpn ;;
+            6)  phase_mosquitto ;;
+            7)  phase_python ;;
+            8)  phase_config ;;
+            9)  phase_monitor ;;
+            10) phase_systemd ;;
+            11) phase_verify ;;
+            *)  err "Fase non valida: $2 (disponibili: 3-11)"; exit 1 ;;
         esac
     else
         phase_udev
         phase_watchdog
+        phase_vpn
         phase_mosquitto
         phase_python
         phase_config
