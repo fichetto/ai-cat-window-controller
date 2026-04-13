@@ -73,7 +73,8 @@ class HeadlessCatDetectorCallback(app_callback_class):
         self.cooldown_base = 30          # 30s, 60s, 120s, 240s...
         self.cooldown_multiplier = 2
         self.cooldown_max = 240          # Cap a 4 minuti
-        self.inactivity_reset = timedelta(minutes=10)
+        self.cat_gone_reset = timedelta(minutes=2)  # Reset cooldown se gatto assente per 2 min
+        self.last_cat_seen_time = None   # Ultimo momento in cui un gatto è stato visto
 
         logger.info("Headless Cat Detector Callback initialized with adaptive thresholds")
 
@@ -254,19 +255,24 @@ class HeadlessCatDetectorCallback(app_callback_class):
             self._was_manual_mode = False
             self.last_cat_time = None
             self.last_no_cat_time = None
+            self.last_cat_seen_time = None
             self._reset_cooldown("uscita da modalità manuale")
             logger.info("Auto mode re-enabled - detection timers reset")
 
-        # Reset cooldown per inattività (10 minuti senza cicli)
-        if (self.last_auto_close_time is not None and
-                current_time - self.last_auto_close_time > self.inactivity_reset):
-            self._reset_cooldown("inattività >10 minuti")
+        # Reset cooldown se il gatto è assente da 2 minuti
+        if (self.last_cat_seen_time is not None and
+                current_time - self.last_cat_seen_time > self.cat_gone_reset):
+            self._reset_cooldown("gatto assente >2 minuti")
 
         # Reset cooldown se ci sono 2+ gatti con almeno uno nella zona sinistra
         if total_cats >= 2 and cat_in_close_zone:
             self._reset_cooldown("secondo gatto rilevato a sinistra")
 
         current_threshold = self.get_current_confidence_threshold()
+
+        # Aggiorna timestamp ultimo avvistamento gatto (qualsiasi posizione)
+        if total_cats > 0:
+            self.last_cat_seen_time = current_time
 
         if should_open_window:
             if self.last_cat_time is None:

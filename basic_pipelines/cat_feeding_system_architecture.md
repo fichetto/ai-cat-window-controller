@@ -379,8 +379,8 @@ Per prevenire questo loop:
 Formula: `min(30 * 2^(n-1), 240)` secondi
 
 **Reset del cooldown:**
+- Gatto assente per 2 minuti (il gatto se n'è andato davvero)
 - 2+ gatti rilevati con almeno uno nel 70% sinistro (situazione diversa)
-- 10 minuti di inattività
 - Uscita da modalità manuale
 - Finestra rimasta aperta >60s (uso genuino, il gatto è passato)
 
