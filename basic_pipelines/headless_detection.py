@@ -124,6 +124,7 @@ class HeadlessDetectorApp:
         self.telegram = None
         self.feeding_manager = None
         self.memory_check_counter = 0
+        self.last_frame_time = time.monotonic()  # Watchdog: ultimo frame processato
 
         # Detection processor generico
         self.detection_processor = DetectionProcessor()
@@ -446,6 +447,12 @@ class HeadlessDetectorApp:
 
             # Avvia il mainloop
             self.mainloop = GLib.MainLoop()
+
+            # Bus handler per errori GStreamer/Hailo
+            bus = self.pipeline.get_bus()
+            bus.add_signal_watch()
+            bus.connect("message", self._on_bus_message)
+
             self.pipeline.set_state(Gst.State.PLAYING)
             logger.info("Pipeline started successfully")
 
@@ -453,6 +460,9 @@ class HeadlessDetectorApp:
             if self.rtsp_cameras:
                 GLib.timeout_add_seconds(3, self._initialize_rtsp_cameras)
                 logger.info(f"RTSP cameras scheduled: {len(self.rtsp_cameras)}")
+
+            # Watchdog: controlla ogni 30s che i frame continuino a fluire
+            GLib.timeout_add_seconds(30, self._pipeline_watchdog)
 
             self.mainloop.run()
 
@@ -462,6 +472,35 @@ class HeadlessDetectorApp:
                 self.telegram.send_message(f"Errore durante l'avvio: {str(e)}")
             self.stop()
             raise
+
+    def _on_bus_message(self, bus, message):
+        """Gestisce messaggi dal bus GStreamer. Rileva errori pipeline/Hailo."""
+        msg_type = message.type
+        if msg_type == Gst.MessageType.ERROR:
+            err, debug = message.parse_error()
+            logger.error(f"GStreamer pipeline error: {err.message}")
+            logger.error(f"Debug info: {debug}")
+            _save_window_state(self.window_controller)
+            _mark_auto_restart(f"pipeline_error: {err.message[:80]}")
+            os._exit(1)
+        elif msg_type == Gst.MessageType.WARNING:
+            err, debug = message.parse_warning()
+            logger.warning(f"GStreamer pipeline warning: {err.message}")
+        elif msg_type == Gst.MessageType.EOS:
+            logger.error("Pipeline reached end of stream unexpectedly")
+            _save_window_state(self.window_controller)
+            _mark_auto_restart("pipeline_eos")
+            os._exit(1)
+
+    def _pipeline_watchdog(self):
+        """Controlla che i frame continuino a fluire. Riavvia se bloccato."""
+        elapsed = time.monotonic() - self.last_frame_time
+        if elapsed > 60:
+            logger.error(f"Pipeline watchdog: no frames for {elapsed:.0f}s - restarting")
+            _save_window_state(self.window_controller)
+            _mark_auto_restart(f"watchdog_no_frames_{elapsed:.0f}s")
+            os._exit(1)
+        return True  # Continua il timer
 
     def stop(self):
         """Ferma l'applicazione."""
@@ -495,6 +534,10 @@ def app_callback(pad, info, user_data):
 
     app_callback.frame_count += 1
     current_time = datetime.now()
+
+    # Aggiorna watchdog
+    if hasattr(user_data, 'app') and user_data.app:
+        user_data.app.last_frame_time = time.monotonic()
 
     # Log e memory check ogni 100 frames
     if app_callback.frame_count % 100 == 0:
