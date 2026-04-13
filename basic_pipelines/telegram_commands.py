@@ -5,10 +5,11 @@ Include comandi per finestra e gestione alimentazione gatti.
 
 import logging
 import asyncio
-from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
     ContextTypes
 )
@@ -42,6 +43,7 @@ BUTTON_MAP = {
     "🔕 Notifiche OFF": "/notificheoff",
     "📷 Telecamere": "/telecamere",
     "🔧 Reset Servo": "/resetservo",
+    "🎛️ Servo": "/servo",
 }
 
 def get_main_keyboard():
@@ -50,9 +52,40 @@ def get_main_keyboard():
         [KeyboardButton("🟢 Apri"), KeyboardButton("🔴 Chiudi"), KeyboardButton("🐱 Fai entrare")],
         [KeyboardButton("🤖 Auto"), KeyboardButton("👋 Manuale"), KeyboardButton("📊 Status")],
         [KeyboardButton("🔔 Notifiche ON"), KeyboardButton("🔕 Notifiche OFF"), KeyboardButton("📷 Telecamere")],
-        [KeyboardButton("🔧 Reset Servo")],
+        [KeyboardButton("🔧 Reset Servo"), KeyboardButton("🎛️ Servo")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_servo_keyboard(servo_type, current_angle):
+    """Crea la inline keyboard per il controllo step di un servo."""
+    label = "Finestra" if servo_type == "window" else "Serratura"
+    keyboard = [
+        [
+            InlineKeyboardButton("-5°", callback_data=f"servo_{servo_type}_-5"),
+            InlineKeyboardButton("-1°", callback_data=f"servo_{servo_type}_-1"),
+            InlineKeyboardButton("+1°", callback_data=f"servo_{servo_type}_+1"),
+            InlineKeyboardButton("+5°", callback_data=f"servo_{servo_type}_+5"),
+        ],
+        [
+            InlineKeyboardButton(f"📐 {label}: {current_angle:.1f}°", callback_data="servo_noop"),
+        ],
+        [
+            InlineKeyboardButton("✅ Fatto", callback_data="servo_done"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_servo_choice_keyboard():
+    """Crea la inline keyboard per scegliere quale servo controllare."""
+    keyboard = [
+        [
+            InlineKeyboardButton("🪟 Finestra", callback_data="servo_choose_window"),
+            InlineKeyboardButton("🔒 Serratura", callback_data="servo_choose_lock"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 
 class TelegramCommands:
     """Mixin per la gestione dei comandi Telegram."""
@@ -105,6 +138,9 @@ class TelegramCommands:
             BotCommand("notificheoff", "Disattiva notifiche RTSP"),
             # Comandi manutenzione
             BotCommand("resetservo", "Reset servo in protezione"),
+            BotCommand("servo", "Controllo manuale servo step-by-step"),
+            BotCommand("servofinestra", "Controllo manuale servo finestra"),
+            BotCommand("servoserratura", "Controllo manuale servo serratura"),
             # Comandi gestione gatti/alimentazione
             BotCommand("gatti", "Lista gatti registrati"),
             BotCommand("classifica", "Classifica pasti giornaliera"),
@@ -133,6 +169,11 @@ class TelegramCommands:
         self.application.add_handler(CommandHandler("foto", self._photo_command))
         # Comandi manutenzione
         self.application.add_handler(CommandHandler("resetservo", self._reset_servo_command))
+        # Comandi controllo manuale servo
+        self.application.add_handler(CommandHandler("servo", self._servo_choice_command))
+        self.application.add_handler(CommandHandler("servofinestra", self._servo_window_command))
+        self.application.add_handler(CommandHandler("servoserratura", self._servo_lock_command))
+        self.application.add_handler(CallbackQueryHandler(self._servo_callback, pattern="^servo_"))
         # Comandi telecamere RTSP
         self.application.add_handler(CommandHandler("telecamere", self._cameras_list_command))
         self.application.add_handler(CommandHandler("cam", self._camera_toggle_command))
@@ -205,6 +246,7 @@ class TelegramCommands:
             "/notificheoff": self._notifications_off_command,
             "/telecamere": self._cameras_list_command,
             "/resetservo": self._reset_servo_command,
+            "/servo": self._servo_choice_command,
         }
 
         handler = handlers.get(command)
@@ -446,6 +488,177 @@ class TelegramCommands:
             "❌ Tutti i tentativi di reset falliti.\nPotrebbe essere necessario togliere alimentazione."
         )
         logger.error("All servo reset attempts failed")
+
+    # ==================== CONTROLLO MANUALE SERVO ====================
+
+    async def _servo_choice_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce il comando /servo - Mostra scelta servo da controllare."""
+        logger.info("Servo choice command received")
+        if not self.window_controller:
+            await self._send_message_with_retry(update, "❌ Controller finestra non disponibile")
+            return
+
+        await update.message.reply_text(
+            "🎛️ Controllo manuale servo\nScegli quale servo controllare:",
+            reply_markup=get_servo_choice_keyboard()
+        )
+
+    async def _servo_window_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce il comando /servofinestra - Controllo step finestra."""
+        logger.info("Servo window manual control command received")
+        if not self.window_controller:
+            await self._send_message_with_retry(update, "❌ Controller finestra non disponibile")
+            return
+
+        # Leggi angolo attuale
+        angles = await asyncio.get_event_loop().run_in_executor(
+            None, self.window_controller.read_servo_angles
+        )
+        if angles is None:
+            await self._send_message_with_retry(update, "❌ Impossibile leggere posizione servo")
+            return
+
+        self.window_controller.manual_mode = True
+        await update.message.reply_text(
+            f"🪟 Controllo manuale FINESTRA\n"
+            f"Modalità: manuale\n"
+            f"Usa i bottoni per muovere di 1° o 5°",
+            reply_markup=get_servo_keyboard("window", angles["window"])
+        )
+
+    async def _servo_lock_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce il comando /servoserratura - Controllo step serratura."""
+        logger.info("Servo lock manual control command received")
+        if not self.window_controller:
+            await self._send_message_with_retry(update, "❌ Controller finestra non disponibile")
+            return
+
+        # Leggi angolo attuale
+        angles = await asyncio.get_event_loop().run_in_executor(
+            None, self.window_controller.read_servo_angles
+        )
+        if angles is None:
+            await self._send_message_with_retry(update, "❌ Impossibile leggere posizione servo")
+            return
+
+        self.window_controller.manual_mode = True
+        await update.message.reply_text(
+            f"🔒 Controllo manuale SERRATURA\n"
+            f"Modalità: manuale\n"
+            f"Usa i bottoni per muovere di 1° o 5°",
+            reply_markup=get_servo_keyboard("lock", angles["lock"])
+        )
+
+    async def _servo_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce i callback dei bottoni inline servo."""
+        query = update.callback_query
+        await query.answer()  # Acknowledges subito per evitare timeout
+
+        data = query.data
+
+        if data == "servo_noop":
+            return
+
+        if data == "servo_done":
+            # Sincronizza stato e chiudi
+            if self.window_controller:
+                angles = await asyncio.get_event_loop().run_in_executor(
+                    None, self.window_controller.sync_state_from_hardware
+                )
+                if angles:
+                    await query.edit_message_text(
+                        f"✅ Controllo servo terminato\n"
+                        f"🪟 Finestra: {angles['window']:.1f}°\n"
+                        f"🔒 Serratura: {angles['lock']:.1f}°\n"
+                        f"Modalità: manuale"
+                    )
+                else:
+                    await query.edit_message_text("✅ Controllo servo terminato")
+            else:
+                await query.edit_message_text("✅ Controllo servo terminato")
+            return
+
+        # Scelta servo dal menu /servo
+        if data == "servo_choose_window":
+            if not self.window_controller:
+                await query.edit_message_text("❌ Controller non disponibile")
+                return
+            angles = await asyncio.get_event_loop().run_in_executor(
+                None, self.window_controller.read_servo_angles
+            )
+            if angles is None:
+                await query.edit_message_text("❌ Impossibile leggere posizione servo")
+                return
+            self.window_controller.manual_mode = True
+            await query.edit_message_text(
+                f"🪟 Controllo manuale FINESTRA\n"
+                f"Modalità: manuale\n"
+                f"Usa i bottoni per muovere di 1° o 5°",
+                reply_markup=get_servo_keyboard("window", angles["window"])
+            )
+            return
+
+        if data == "servo_choose_lock":
+            if not self.window_controller:
+                await query.edit_message_text("❌ Controller non disponibile")
+                return
+            angles = await asyncio.get_event_loop().run_in_executor(
+                None, self.window_controller.read_servo_angles
+            )
+            if angles is None:
+                await query.edit_message_text("❌ Impossibile leggere posizione servo")
+                return
+            self.window_controller.manual_mode = True
+            await query.edit_message_text(
+                f"🔒 Controllo manuale SERRATURA\n"
+                f"Modalità: manuale\n"
+                f"Usa i bottoni per muovere di 1° o 5°",
+                reply_markup=get_servo_keyboard("lock", angles["lock"])
+            )
+            return
+
+        # Parsing step: servo_{window|lock}_{delta}
+        parts = data.split("_")
+        if len(parts) != 3:
+            return
+
+        servo_type = parts[1]  # "window" o "lock"
+        try:
+            delta = int(parts[2])
+        except ValueError:
+            return
+
+        if not self.window_controller:
+            await query.edit_message_text("❌ Controller non disponibile")
+            return
+
+        # Esegui step in executor per non bloccare l'event loop
+        try:
+            success, target, readback = await asyncio.get_event_loop().run_in_executor(
+                None, self.window_controller.step_servo, servo_type, delta
+            )
+        except Exception as e:
+            logger.error(f"Servo step error: {e}")
+            label = "Finestra" if servo_type == "window" else "Serratura"
+            await query.edit_message_text(
+                f"❌ Errore: {e}\nRiprova con i bottoni.",
+                reply_markup=get_servo_keyboard(servo_type, 0)
+            )
+            return
+
+        if success:
+            label = "FINESTRA" if servo_type == "window" else "SERRATURA"
+            await query.edit_message_text(
+                f"{'🪟' if servo_type == 'window' else '🔒'} Controllo manuale {label}\n"
+                f"Target: {target:.1f}° → Letto: {readback:.1f}°",
+                reply_markup=get_servo_keyboard(servo_type, readback)
+            )
+        else:
+            label = "Finestra" if servo_type == "window" else "Serratura"
+            await query.edit_message_text(
+                f"⚠️ {label}: comando fallito (target: {target:.1f}°)\nRiprova.",
+                reply_markup=get_servo_keyboard(servo_type, readback)
+            )
 
     # ==================== COMANDI GESTIONE GATTI ====================
 
