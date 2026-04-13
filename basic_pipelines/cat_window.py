@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+import json
 from pymodbus.client import ModbusSerialClient
 import time
 
@@ -102,6 +103,108 @@ def set_lock_angle(client, angle):
         print(f"Errore lettura serratura: {e}")
         return False
 
+def read_angles(client):
+    """
+    Legge gli angoli attuali di finestra e serratura dai registri Modbus.
+
+    Returns:
+        dict: {"window": float, "lock": float} oppure None in caso di errore
+    """
+    try:
+        result_w = client.read_holding_registers(address=1, count=1, slave=1)
+        result_l = client.read_holding_registers(address=3, count=1, slave=1)
+        if result_w is None or result_l is None:
+            print("Nessuna risposta durante la lettura angoli")
+            return None
+        window_angle = float(result_w.registers[0]) / 10.0
+        lock_angle = float(result_l.registers[0]) / 10.0
+        return {"window": window_angle, "lock": lock_angle}
+    except Exception as e:
+        print(f"Errore lettura angoli: {e}")
+        return None
+
+
+def ramp_window_to_angle(client, target, step=2.0, delay=0.3):
+    """
+    Muove la finestra verso il target con rampa graduale lato Python.
+    Invia step intermedi e verifica la posizione dopo ciascuno.
+
+    Args:
+        client: client Modbus
+        target: angolo target
+        step: gradi per ogni step intermedio (default 2.0)
+        delay: pausa in secondi tra ogni step (default 0.3)
+
+    Returns:
+        (bool, float): (successo, angolo finale letto)
+    """
+    angles = read_angles(client)
+    if angles is None:
+        print("Impossibile leggere posizione attuale per la rampa")
+        return False, -1
+
+    current = angles["window"]
+    print(f"Rampa finestra: {current:.1f}° → {target:.1f}° (step {step}°)")
+
+    if abs(current - target) <= step:
+        # Già abbastanza vicino, manda direttamente il target
+        angle_reg = int(round(target * 10))
+        try:
+            client.write_register(address=0, value=angle_reg, slave=1)
+        except Exception as e:
+            print(f"Errore scrittura setpoint: {e}")
+            return False, current
+        time.sleep(delay + 0.2)
+        angles = read_angles(client)
+        final = angles["window"] if angles else target
+        print(f"Rampa completata: {final:.1f}°")
+        return True, final
+
+    # Calcola direzione
+    direction = 1.0 if target > current else -1.0
+    pos = current
+
+    while abs(pos - target) > step:
+        pos += direction * step
+        angle_reg = int(round(pos * 10))
+        try:
+            client.write_register(address=0, value=angle_reg, slave=1)
+        except Exception as e:
+            print(f"Errore scrittura step {pos:.1f}°: {e}")
+            return False, pos - direction * step
+
+        time.sleep(delay)
+
+        # Verifica posizione
+        angles = read_angles(client)
+        if angles is None:
+            print(f"Errore lettura durante rampa a {pos:.1f}°")
+            return False, pos
+
+        actual = angles["window"]
+        diff = abs(actual - pos)
+        print(f"  Step: target={pos:.1f}° actual={actual:.1f}° (diff={diff:.1f}°)")
+
+        # Se la differenza è troppo grande, il servo potrebbe essere bloccato
+        if diff > step * 3:
+            print(f"ATTENZIONE: servo non segue il setpoint (diff={diff:.1f}°), fermata!")
+            return False, actual
+
+    # Step finale al target esatto
+    angle_reg = int(round(target * 10))
+    try:
+        client.write_register(address=0, value=angle_reg, slave=1)
+    except Exception as e:
+        print(f"Errore scrittura target finale: {e}")
+        return False, pos
+
+    time.sleep(delay + 0.2)
+    angles = read_angles(client)
+    final = angles["window"] if angles else target
+    print(f"Rampa completata: {final:.1f}°")
+    return True, final
+
+
 def lock_window(client):
     """Blocca la finestra (serratura a 0°)"""
     return set_lock_angle(client, 0)
@@ -111,21 +214,23 @@ def unlock_window(client):
     return set_lock_angle(client, 90)
 
 def open_window(client):
-    """Sblocca e apre completamente la finestra"""
+    """Sblocca e apre completamente la finestra (con rampa)"""
     if not unlock_window(client):
         print("Errore durante lo sblocco della finestra")
         return False
 
-    if not set_window_angle(client, 120):
-        print("Errore durante l'apertura della finestra")
+    success, final_angle = ramp_window_to_angle(client, 120)
+    if not success:
+        print(f"Errore durante l'apertura della finestra (fermata a {final_angle:.1f}°)")
         return False
 
     return True
 
 def close_window(client):
-    """Chiude e blocca la finestra"""
-    if not set_window_angle(client, 77):
-        print("Errore durante la chiusura della finestra")
+    """Chiude e blocca la finestra (con rampa)"""
+    success, final_angle = ramp_window_to_angle(client, 77)
+    if not success:
+        print(f"Errore durante la chiusura della finestra (fermata a {final_angle:.1f}°)")
         return False
 
     time.sleep(1)
@@ -250,12 +355,13 @@ def main():
     if len(sys.argv) < 2:
         print("Uso: python3 cat_window.py <comando>")
         print("Comandi disponibili:")
-        print("  apri       - Sblocca e apre la finestra")
-        print("  chiudi     - Chiude e blocca la finestra")
+        print("  apri       - Sblocca e apre la finestra (con rampa)")
+        print("  chiudi     - Chiude e blocca la finestra (con rampa)")
         print("  finestra <angolo>   - Angolo finestra (77-135)")
         print("  serratura <angolo>  - Angolo serratura (0-90)")
         print("  sblocca    - Sblocca la serratura (90°)")
         print("  blocca     - Blocca la serratura (0°)")
+        print("  leggi      - Legge angoli attuali (JSON)")
         print("  reset      - Reset soft PCA9685 via Modbus")
         print("  hardreset  - Reset Arduino via DTR")
         print("  usbreset   - Reset porta USB (più aggressivo)")
@@ -329,6 +435,13 @@ def main():
             if not lock_window(client):
                 print("Operazione blocco fallita")
                 sys.exit(1)
+
+        elif comando == "leggi":
+            angles = read_angles(client)
+            if angles is None:
+                print(json.dumps({"error": "Impossibile leggere angoli"}))
+                sys.exit(1)
+            print(json.dumps(angles))
 
         elif comando == "reset":
             if not reset_pca9685(client):

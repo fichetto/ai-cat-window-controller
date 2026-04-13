@@ -4,9 +4,11 @@ Controller per la finestra motorizzata con serratura.
 
 import os
 import sys
+import json
 import logging
 import subprocess
 import threading
+import time
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,135 @@ class WindowController:
         except Exception as e:
             logger.error(f"Error executing window command: {e}")
             return False
+
+    def _execute_window_command_with_output(self, command, *args):
+        """
+        Esegue un comando per la finestra e ritorna anche lo stdout.
+
+        Returns:
+            tuple: (success: bool, stdout: str)
+        """
+        try:
+            cmd_args = [self.python_exe, self.window_script, command]
+            for arg in args:
+                cmd_args.append(str(arg))
+
+            logger.info(f"Executing window command (with output): {' '.join(cmd_args)}")
+            result = subprocess.run(cmd_args, capture_output=True, text=True, check=True)
+            return True, result.stdout.strip()
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Window command failed: {e.stderr}")
+            return False, e.stdout.strip() if e.stdout else ""
+        except Exception as e:
+            logger.error(f"Error executing window command: {e}")
+            return False, ""
+
+    def read_servo_angles(self):
+        """
+        Legge gli angoli attuali dei servo dall'hardware.
+
+        Returns:
+            dict: {"window": float, "lock": float} oppure None
+        """
+        success, output = self._execute_window_command_with_output('leggi')
+        if not success:
+            logger.error("Failed to read servo angles")
+            return None
+        try:
+            # L'output può contenere messaggi di connessione prima del JSON
+            # Prendi solo l'ultima riga che contiene il JSON
+            lines = output.strip().split('\n')
+            json_line = lines[-1]
+            angles = json.loads(json_line)
+            if "error" in angles:
+                logger.error(f"Hardware read error: {angles['error']}")
+                return None
+            return angles
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Failed to parse servo angles: {e}, output: {output}")
+            return None
+
+    def step_servo(self, servo_type, delta):
+        """
+        Muove un servo di delta gradi. Per uso manuale d'emergenza.
+        Nessun cooldown, entra automaticamente in modalità manuale.
+
+        Args:
+            servo_type: "window" o "lock"
+            delta: gradi da muovere (positivo o negativo)
+
+        Returns:
+            tuple: (success: bool, target_angle: float, readback_angle: float)
+        """
+        self.manual_mode = True
+
+        with self._movement_lock:
+            self._is_moving = True
+            try:
+                # Leggi posizione attuale
+                angles = self.read_servo_angles()
+                if angles is None:
+                    return False, 0, 0
+
+                current = angles[servo_type]
+                target = current + delta
+
+                # Invia comando
+                if servo_type == "window":
+                    cmd = "finestra"
+                else:
+                    cmd = "serratura"
+
+                success = self._execute_window_command(cmd, target)
+                if not success:
+                    return False, target, current
+
+                time.sleep(0.5)
+
+                # Rileggi posizione
+                angles = self.read_servo_angles()
+                if angles is None:
+                    readback = target  # Assume target raggiunto
+                else:
+                    readback = angles[servo_type]
+
+                # Aggiorna stato interno
+                if servo_type == "window":
+                    self.current_angle = readback
+                    self.target_angle = target
+                    self.is_window_open = (readback > self.CLOSED_ANGLE + 5)
+                else:
+                    self.current_lock_angle = readback
+                    self.target_lock_angle = target
+                    self.is_window_locked = (readback < 10)
+
+                logger.info(f"Step servo {servo_type}: {current:.1f}° → {target:.1f}° (readback: {readback:.1f}°)")
+                return True, target, readback
+            finally:
+                self._is_moving = False
+
+    def sync_state_from_hardware(self):
+        """
+        Sincronizza lo stato interno con la posizione reale dei servo.
+        Da chiamare dopo il controllo manuale step.
+
+        Returns:
+            dict: {"window": float, "lock": float} oppure None
+        """
+        angles = self.read_servo_angles()
+        if angles is None:
+            return None
+
+        self.current_angle = angles["window"]
+        self.current_lock_angle = angles["lock"]
+        self.is_window_open = (angles["window"] > self.CLOSED_ANGLE + 5)
+        self.is_window_locked = (angles["lock"] < 10)
+
+        logger.info(f"State synced from hardware: window={angles['window']:.1f}° "
+                    f"({'open' if self.is_window_open else 'closed'}), "
+                    f"lock={angles['lock']:.1f}° "
+                    f"({'locked' if self.is_window_locked else 'unlocked'})")
+        return angles
 
     def set_window_position(self, should_be_open, manual=False):
         """
