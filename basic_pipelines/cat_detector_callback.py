@@ -4,6 +4,7 @@ Callback handler per il rilevamento dei gatti e la gestione della finestra.
 """
 
 import os
+import json
 import cv2
 import logging
 from datetime import datetime, timedelta
@@ -11,6 +12,9 @@ from hailo_rpi_common import app_callback_class
 
 # Configurazione logging
 logger = logging.getLogger(__name__)
+
+# File persistente per le preferenze notifiche RTSP (non in /tmp/ per sopravvivere ai reboot)
+RTSP_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.rtsp_notifications.json')
 
 class HeadlessCatDetectorCallback(app_callback_class):
     """
@@ -33,6 +37,7 @@ class HeadlessCatDetectorCallback(app_callback_class):
         self.rtsp_notification_cooldown = timedelta(seconds=60)  # Cooldown 1 minuto
         self.rtsp_save_dir = "detected_objects"
         self.rtsp_notifications_enabled = True  # Flag per abilitare/disabilitare notifiche RTSP
+        self._load_rtsp_notifications()  # Ripristina preferenza salvata
 
         # Configurazione soglie di confidenza
         self.min_confidence_closed = 0.8  # Soglia quando finestra chiusa (alzata per ridurre falsi positivi)
@@ -358,6 +363,26 @@ class HeadlessCatDetectorCallback(app_callback_class):
                             self.telegram.send_window_status(False, message)
 
     # === Metodi per RTSP multi-camera ===
+
+    def _load_rtsp_notifications(self):
+        """Carica preferenza notifiche RTSP da file persistente."""
+        try:
+            if os.path.exists(RTSP_SETTINGS_FILE):
+                with open(RTSP_SETTINGS_FILE, 'r') as f:
+                    settings = json.load(f)
+                self.rtsp_notifications_enabled = settings.get('rtsp_notifications_enabled', True)
+                logger.info(f"RTSP notifications loaded: {'enabled' if self.rtsp_notifications_enabled else 'disabled'}")
+        except Exception as e:
+            logger.error(f"Failed to load RTSP settings: {e}")
+
+    def save_rtsp_notifications(self):
+        """Salva preferenza notifiche RTSP su file persistente."""
+        try:
+            with open(RTSP_SETTINGS_FILE, 'w') as f:
+                json.dump({'rtsp_notifications_enabled': self.rtsp_notifications_enabled}, f)
+            logger.info(f"RTSP notifications saved: {'enabled' if self.rtsp_notifications_enabled else 'disabled'}")
+        except Exception as e:
+            logger.error(f"Failed to save RTSP settings: {e}")
 
     def can_send_rtsp_notification(self, camera_name, label):
         """

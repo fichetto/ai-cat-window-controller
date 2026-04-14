@@ -893,6 +893,7 @@ class TelegramCommands:
 
         enable = (action == 'on')
         self.user_data.rtsp_notifications_enabled = enable
+        self.user_data.save_rtsp_notifications()
 
         status = "🟢 attivate" if enable else "🔴 disattivate"
         await update.message.reply_text(f"✅ Notifiche telecamere RTSP {status}")
@@ -904,6 +905,7 @@ class TelegramCommands:
             await update.message.reply_text("⚠️ Sistema non disponibile")
             return
         self.user_data.rtsp_notifications_enabled = True
+        self.user_data.save_rtsp_notifications()
         await update.message.reply_text("✅ Notifiche telecamere RTSP 🟢 attivate")
         logger.info("RTSP notifications enabled via direct command")
 
@@ -913,5 +915,6 @@ class TelegramCommands:
             await update.message.reply_text("⚠️ Sistema non disponibile")
             return
         self.user_data.rtsp_notifications_enabled = False
+        self.user_data.save_rtsp_notifications()
         await update.message.reply_text("✅ Notifiche telecamere RTSP 🔴 disattivate")
         logger.info("RTSP notifications disabled via direct command")

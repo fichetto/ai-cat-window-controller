@@ -173,6 +173,7 @@ named_cats/
 cats_database.json
 cat_window_state.json
 system_stats.json
+.rtsp_notifications.json
 tapo_config.py
 
 # Large model files
