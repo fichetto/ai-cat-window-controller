@@ -265,7 +265,9 @@ class TelegramCommands:
         error_message = None
 
         try:
-            command_success = self.window_controller.set_window_position(True, manual=True)
+            command_success = await asyncio.get_event_loop().run_in_executor(
+                None, self.window_controller.set_window_position, True, True
+            )
         except Exception as e:
             error_message = str(e)
             logger.error(f"Error executing window command: {e}")
@@ -293,7 +295,9 @@ class TelegramCommands:
 
         try:
             current_mode = "automatica" if self.window_controller.auto_control_enabled() else "manuale"
-            command_success = self.window_controller.set_window_position(True, manual=False)
+            command_success = await asyncio.get_event_loop().run_in_executor(
+                None, self.window_controller.set_window_position, True, False
+            )
 
             if command_success:
                 self.window_controller.set_let_in_time()
@@ -327,7 +331,9 @@ class TelegramCommands:
         error_message = None
 
         try:
-            command_success = self.window_controller.set_window_position(False, manual=True)
+            command_success = await asyncio.get_event_loop().run_in_executor(
+                None, self.window_controller.set_window_position, False, True
+            )
         except Exception as e:
             error_message = str(e)
             logger.error(f"Error executing window command: {e}")
@@ -429,11 +435,15 @@ class TelegramCommands:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         cat_window = os.path.join(script_dir, "cat_window.py")
 
+        def _run_subprocess(args):
+            return subprocess.run(args, capture_output=True, text=True, timeout=15)
+
+        loop = asyncio.get_event_loop()
+
         # 1. Prova reset soft PCA9685
         try:
-            result = subprocess.run(
-                ["python3", cat_window, "reset"],
-                capture_output=True, text=True, timeout=15
+            result = await loop.run_in_executor(
+                None, _run_subprocess, ["python3", cat_window, "reset"]
             )
             if result.returncode == 0:
                 await self._send_message_with_retry(
@@ -450,9 +460,8 @@ class TelegramCommands:
         # 2. Fallback: reset Arduino via DTR
         await self._send_message_with_retry(update, "⚠️ Reset soft fallito, provo reset Arduino via DTR...")
         try:
-            result = subprocess.run(
-                ["python3", cat_window, "hardreset"],
-                capture_output=True, text=True, timeout=15
+            result = await loop.run_in_executor(
+                None, _run_subprocess, ["python3", cat_window, "hardreset"]
             )
             if result.returncode == 0:
                 await self._send_message_with_retry(
@@ -469,9 +478,8 @@ class TelegramCommands:
         # 3. Ultimo tentativo: reset USB
         await self._send_message_with_retry(update, "⚠️ Reset DTR fallito, provo reset USB...")
         try:
-            result = subprocess.run(
-                ["python3", cat_window, "usbreset"],
-                capture_output=True, text=True, timeout=15
+            result = await loop.run_in_executor(
+                None, _run_subprocess, ["python3", cat_window, "usbreset"]
             )
             if result.returncode == 0:
                 await self._send_message_with_retry(
