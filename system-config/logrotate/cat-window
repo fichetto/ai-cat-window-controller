@@ -1,0 +1,10 @@
+/home/pi/hailo-rpi5-examples/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0644 pi pi
+}

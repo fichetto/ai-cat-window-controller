@@ -221,9 +221,25 @@ phase_systemd() {
     fi
 }
 
-# Fase 11: Verifica finale
+# Fase 11: Rotazione log
+phase_logrotate() {
+    phase_header 11 "Rotazione log (logrotate)"
+
+    cp "$PROJECT_DIR/system-config/logrotate/cat-window" /etc/logrotate.d/cat-window
+    chown root:root /etc/logrotate.d/cat-window
+    chmod 0644 /etc/logrotate.d/cat-window
+    ok "Installato /etc/logrotate.d/cat-window"
+
+    if logrotate -d /etc/logrotate.d/cat-window > /dev/null 2>&1; then
+        ok "Configurazione logrotate valida"
+    else
+        warn "logrotate -d ha riportato errori - controlla manualmente"
+    fi
+}
+
+# Fase 12: Verifica finale
 phase_verify() {
-    phase_header 11 "Verifica Completa"
+    phase_header 12 "Verifica Completa"
 
     echo ""
     # Hailo
@@ -313,8 +329,9 @@ main() {
             8)  phase_config ;;
             9)  phase_monitor ;;
             10) phase_systemd ;;
-            11) phase_verify ;;
-            *)  err "Fase non valida: $2 (disponibili: 3-11)"; exit 1 ;;
+            11) phase_logrotate ;;
+            12) phase_verify ;;
+            *)  err "Fase non valida: $2 (disponibili: 3-12)"; exit 1 ;;
         esac
     else
         phase_udev
@@ -325,6 +342,7 @@ main() {
         phase_config
         phase_monitor
         phase_systemd
+        phase_logrotate
         phase_verify
     fi
 }
