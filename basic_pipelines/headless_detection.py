@@ -354,11 +354,11 @@ class HeadlessDetectorApp:
             video/x-raw, format=RGB, width=640, height=640, pixel-aspect-ratio=1/1 !
             identity name=usb_tagger !
             funnel name=source_funnel !
-            queue name=inference_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !
+            queue name=inference_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
             hailonet name=inference_hailonet hef-path={self.hef_path} batch-size=1 !
-            queue name=filter_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !
+            queue name=filter_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
             hailofilter name=inference_hailofilter so-path={post_process_so} qos=false !
-            queue name=callback_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !
+            queue name=callback_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
             identity name=identity_callback !
             fakesink sync=false name=sink
 
@@ -474,15 +474,24 @@ class HeadlessDetectorApp:
             raise
 
     def _on_bus_message(self, bus, message):
-        """Gestisce messaggi dal bus GStreamer. Rileva errori pipeline/Hailo."""
+        """Gestisce messaggi dal bus GStreamer. Riavvia solo su errori da elementi critici."""
         msg_type = message.type
         if msg_type == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
-            logger.error(f"GStreamer pipeline error: {err.message}")
-            logger.error(f"Debug info: {debug}")
-            _save_window_state(self.window_controller)
-            _mark_auto_restart(f"pipeline_error: {err.message[:80]}")
-            os._exit(1)
+            src_name = message.src.get_name() if message.src else "unknown"
+            # Solo errori da sorgente USB o inferenza Hailo richiedono riavvio
+            critical_names = ("inference_hailonet", "inference_hailofilter")
+            is_critical = src_name in critical_names or src_name.startswith("v4l2src")
+            if is_critical:
+                logger.error(f"GStreamer critical error from {src_name}: {err.message}")
+                logger.error(f"Debug info: {debug}")
+                _save_window_state(self.window_controller)
+                _mark_auto_restart(f"pipeline_error: {src_name}: {err.message[:80]}")
+                os._exit(1)
+            else:
+                # Errori da appsrc RTSP o elementi non critici: log e continua
+                # Il watchdog frame (60s) interviene se il pipeline si blocca davvero
+                logger.warning(f"Non-critical pipeline error from {src_name}: {err.message} — continuing")
         elif msg_type == Gst.MessageType.WARNING:
             err, debug = message.parse_warning()
             logger.warning(f"GStreamer pipeline warning: {err.message}")
