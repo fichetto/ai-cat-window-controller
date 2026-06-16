@@ -124,16 +124,17 @@ def read_angles(client):
         return None
 
 
-def ramp_window_to_angle(client, target, step=2.0, delay=0.3):
+def ramp_window_to_angle(client, target, step=0.5, delay=0.05):
     """
     Muove la finestra verso il target con rampa graduale lato Python.
-    Invia step intermedi e verifica la posizione dopo ciascuno.
+    Invia setpoint intermedi a flusso continuo (senza letture tra uno e l'altro)
+    in modo che il servo si muova fluidamente. Verifica solo alla fine.
 
     Args:
         client: client Modbus
         target: angolo target
-        step: gradi per ogni step intermedio (default 2.0)
-        delay: pausa in secondi tra ogni step (default 0.3)
+        step: gradi per ogni step intermedio (default 0.5)
+        delay: pausa in secondi tra ogni step (default 0.05)
 
     Returns:
         (bool, float): (successo, angolo finale letto)
@@ -144,26 +145,14 @@ def ramp_window_to_angle(client, target, step=2.0, delay=0.3):
         return False, -1
 
     current = angles["window"]
-    print(f"Rampa finestra: {current:.1f}° → {target:.1f}° (step {step}°)")
+    print(f"Rampa finestra: {current:.1f}° → {target:.1f}° (step {step}°, delay {delay}s)")
 
-    if abs(current - target) <= step:
-        # Già abbastanza vicino, manda direttamente il target
-        angle_reg = int(round(target * 10))
-        try:
-            client.write_register(address=0, value=angle_reg, slave=1)
-        except Exception as e:
-            print(f"Errore scrittura setpoint: {e}")
-            return False, current
-        time.sleep(delay + 0.2)
-        angles = read_angles(client)
-        final = angles["window"] if angles else target
-        print(f"Rampa completata: {final:.1f}°")
-        return True, final
-
-    # Calcola direzione
     direction = 1.0 if target > current else -1.0
     pos = current
 
+    # Stream di setpoint intermedi senza letture intermedie:
+    # il servo riceve nuovi target prima di aver finito il precedente,
+    # quindi si muove con continuità invece che a scatti.
     while abs(pos - target) > step:
         pos += direction * step
         angle_reg = int(round(pos * 10))
@@ -175,22 +164,7 @@ def ramp_window_to_angle(client, target, step=2.0, delay=0.3):
 
         time.sleep(delay)
 
-        # Verifica posizione
-        angles = read_angles(client)
-        if angles is None:
-            print(f"Errore lettura durante rampa a {pos:.1f}°")
-            return False, pos
-
-        actual = angles["window"]
-        diff = abs(actual - pos)
-        print(f"  Step: target={pos:.1f}° actual={actual:.1f}° (diff={diff:.1f}°)")
-
-        # Se la differenza è troppo grande, il servo potrebbe essere bloccato
-        if diff > step * 3:
-            print(f"ATTENZIONE: servo non segue il setpoint (diff={diff:.1f}°), fermata!")
-            return False, actual
-
-    # Step finale al target esatto
+    # Setpoint finale esatto
     angle_reg = int(round(target * 10))
     try:
         client.write_register(address=0, value=angle_reg, slave=1)
@@ -198,10 +172,18 @@ def ramp_window_to_angle(client, target, step=2.0, delay=0.3):
         print(f"Errore scrittura target finale: {e}")
         return False, pos
 
-    time.sleep(delay + 0.2)
+    # Attesa per consentire al servo di raggiungere il target finale,
+    # poi verifica posizione raggiunta
+    time.sleep(0.5)
     angles = read_angles(client)
     final = angles["window"] if angles else target
-    print(f"Rampa completata: {final:.1f}°")
+    diff = abs(final - target)
+    print(f"Rampa completata: target={target:.1f}° actual={final:.1f}° (diff={diff:.1f}°)")
+
+    if diff > 3.0:
+        print(f"ATTENZIONE: posizione finale lontana dal target (diff={diff:.1f}°)")
+        return False, final
+
     return True, final
 
 
