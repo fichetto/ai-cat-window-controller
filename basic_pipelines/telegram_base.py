@@ -63,7 +63,7 @@ class TelegramBase:
         self.watchdog_running = False
         self.watchdog_interval = 300  # Controlla ogni 5 minuti
         self.heartbeat_timeout = 900  # 15 minuti senza heartbeat = problema
-        self.polling_timeout = 1800  # 30 minuti senza update ricevuti = problema (rileva polling bloccato)
+        self.polling_timeout = 300  # 5 minuti senza update ricevuti = problema (rileva polling bloccato)
         self.connection_failures = 0  # Contatore fallimenti consecutivi
         self.max_connection_failures = 3  # Riavvia dopo 3 fallimenti consecutivi
         self.bot_init_failures = 0  # Contatore fallimenti inizializzazione bot
