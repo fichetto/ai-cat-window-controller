@@ -17,7 +17,6 @@ import argparse
 import json
 import threading
 import time
-import collections
 from datetime import datetime, timedelta
 from hailo_rpi_common import (
     get_caps_from_pad,
@@ -38,6 +37,17 @@ except ImportError:
 
 # Intervallo iniezione frame RTSP (secondi)
 RTSP_INJECT_INTERVAL = 2.0
+
+# Quando la webcam USB è assente, una telecamera RTSP può essere "promossa" a
+# primary e gestire il controllo finestra automatico. Il nome deve corrispondere
+# esattamente a quello in tapo_config.TAPO_CAMERAS.
+# Lascia None per disabilitare la promozione (modalità solo-notifiche).
+PRIMARY_RTSP_FALLBACK_CAMERA = "Corridoio"
+# Se True, le coordinate X della primary RTSP sono specchiate (1 - x) prima di
+# applicare la logica USB. Necessario quando l'inquadratura ha la finestra a
+# destra mentre la logica USB assume finestra a sinistra.
+# Corridoio attuale: inquadra come la USB (finestra a sinistra) → mirror NON serve.
+PRIMARY_RTSP_FALLBACK_MIRROR_X = False
 
 # Configurazione logging con FileHandler
 logging.basicConfig(
@@ -125,6 +135,7 @@ class HeadlessDetectorApp:
         self.feeding_manager = None
         self.memory_check_counter = 0
         self.last_frame_time = time.monotonic()  # Watchdog: ultimo frame processato
+        self.usb_enabled = True  # Sovrascritto in build_pipeline() in base alla presenza del device
 
         # Detection processor generico
         self.detection_processor = DetectionProcessor()
@@ -134,8 +145,15 @@ class HeadlessDetectorApp:
         self.rtsp_threads = []
         self.rtsp_running = False
         self.appsrc = None
-        # Coda thread-safe per sorgenti frame (risolve race condition)
-        self.source_queue = collections.deque(maxlen=100)
+        # Ultimo frame ricevuto per sorgente (per comando Telegram /foto).
+        # Chiavi: "USB" per la webcam locale, nome camera per ogni RTSP.
+        # Valori: (frame BGR np.ndarray, datetime).
+        self.last_frames = {}
+        self.last_frames_lock = threading.Lock()
+
+        # Mappa pts→sorgente per tracking thread-safe (resistente ai drop delle code leaky)
+        self.source_map = {}  # {pts (int): (source, camera, monotonic_time)}
+        self.source_map_lock = threading.Lock()
         self.pending_rtsp_lock = threading.Lock()
 
         # Inizializza prima il controller della finestra
@@ -243,6 +261,9 @@ class HeadlessDetectorApp:
                 if now - last_inject < RTSP_INJECT_INTERVAL:
                     continue
 
+                # Memorizza ultimo frame full-res BGR per /foto Telegram
+                self._store_last_frame(camera_name, frame)
+
                 # Letterbox resize a 640x640
                 frame_resized = self._letterbox_resize(frame, 640, 640)
                 frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
@@ -282,6 +303,36 @@ class HeadlessDetectorApp:
         padded[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized
 
         return padded
+
+    # === Snapshot API per /foto Telegram ===
+
+    def _store_last_frame(self, name, frame_bgr):
+        """Memorizza l'ultimo frame BGR ricevuto per la sorgente 'name'.
+        Fa una copia per non condividere memoria con il chiamante."""
+        if frame_bgr is None:
+            return
+        try:
+            snapshot = frame_bgr.copy()
+        except Exception:
+            return
+        with self.last_frames_lock:
+            self.last_frames[name] = (snapshot, datetime.now())
+
+    def get_snapshot(self, name):
+        """Restituisce (frame_bgr_copy, datetime) o None se non disponibile.
+        Lookup case-insensitive sul nome."""
+        target = name.lower()
+        with self.last_frames_lock:
+            for key, (frame, ts) in self.last_frames.items():
+                if key.lower() == target:
+                    return frame.copy(), ts
+        return None
+
+    def get_available_snapshots(self):
+        """Lista [(name, datetime)] ordinata per nome."""
+        with self.last_frames_lock:
+            items = [(name, ts) for name, (_, ts) in self.last_frames.items()]
+        return sorted(items, key=lambda x: x[0].lower())
 
     def _create_gst_buffer(self, frame):
         """Crea un GstBuffer da un numpy array RGB."""
@@ -323,7 +374,12 @@ class HeadlessDetectorApp:
         return False
 
     def build_pipeline(self):
-        """Costruisce il pipeline GStreamer con supporto multi-sorgente."""
+        """Costruisce il pipeline GStreamer con supporto multi-sorgente.
+
+        Se la webcam USB (self.input_source) non è disponibile, costruisce una
+        pipeline solo-RTSP: il servizio parte comunque e fa notifiche dalle Tapo,
+        ma il controllo finestra automatico è disattivato (gestibile via Telegram).
+        """
         script_dir = os.path.dirname(os.path.abspath(__file__))
         base_dir = os.path.dirname(script_dir)
 
@@ -341,33 +397,64 @@ class HeadlessDetectorApp:
         logger.info(f"Using HEF file: {self.hef_path}")
         logger.info(f"Using post-process SO: {post_process_so}")
 
-        # Pipeline con funnel per multi-sorgente
-        # USB camera -> usb_tagger -> funnel -> hailonet -> callback
-        # appsrc (RTSP) -> rtsp_tagger -> funnel
-        pipeline_str = f'''
-            v4l2src device={self.input_source} !
-            video/x-raw, width=640, height=480 !
-            queue name=usb_scale_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !
-            videoscale name=usb_videoscale n-threads=2 !
-            queue name=usb_convert_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !
-            videoconvert n-threads=3 name=usb_convert qos=false !
-            video/x-raw, format=RGB, width=640, height=640, pixel-aspect-ratio=1/1 !
-            identity name=usb_tagger !
-            funnel name=source_funnel !
-            queue name=inference_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
-            hailonet name=inference_hailonet hef-path={self.hef_path} batch-size=1 !
-            queue name=filter_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
-            hailofilter name=inference_hailofilter so-path={post_process_so} qos=false !
-            queue name=callback_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
-            identity name=identity_callback !
-            fakesink sync=false name=sink
+        self.usb_enabled = os.path.exists(self.input_source)
+        if not self.usb_enabled:
+            if PRIMARY_RTSP_FALLBACK_CAMERA:
+                mirror_note = " (coordinate specchiate)" if PRIMARY_RTSP_FALLBACK_MIRROR_X else ""
+                logger.warning(
+                    f"USB camera {self.input_source} not found — promoting RTSP "
+                    f"'{PRIMARY_RTSP_FALLBACK_CAMERA}' to primary{mirror_note}: "
+                    f"controllo finestra automatico ATTIVO via questa telecamera"
+                )
+            else:
+                logger.warning(
+                    f"USB camera {self.input_source} not found — entering RTSP-only mode "
+                    f"(automatic window control disabled, Telegram commands still work)"
+                )
 
-            appsrc name=rtsp_appsrc is-live=true format=time do-timestamp=true
-                caps=video/x-raw,format=RGB,width=640,height=640,framerate=1/1 !
-            queue name=rtsp_q leaky=downstream max-size-buffers=2 max-size-bytes=0 max-size-time=0 !
-            identity name=rtsp_tagger !
-            source_funnel.
-        '''
+        if self.usb_enabled:
+            # Pipeline con funnel per multi-sorgente
+            # USB camera -> usb_tagger -> funnel -> hailonet -> callback
+            # appsrc (RTSP) -> rtsp_tagger -> funnel
+            pipeline_str = f'''
+                v4l2src device={self.input_source} !
+                video/x-raw, width=640, height=480 !
+                queue name=usb_scale_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !
+                videoscale name=usb_videoscale n-threads=2 !
+                queue name=usb_convert_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !
+                videoconvert n-threads=3 name=usb_convert qos=false !
+                video/x-raw, format=RGB, width=640, height=640, pixel-aspect-ratio=1/1 !
+                identity name=usb_tagger !
+                funnel name=source_funnel !
+                queue name=inference_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
+                hailonet name=inference_hailonet hef-path={self.hef_path} batch-size=1 !
+                queue name=filter_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
+                hailofilter name=inference_hailofilter so-path={post_process_so} qos=false !
+                queue name=callback_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
+                identity name=identity_callback !
+                fakesink sync=false name=sink
+
+                appsrc name=rtsp_appsrc is-live=true format=time do-timestamp=true
+                    caps=video/x-raw,format=RGB,width=640,height=640,framerate=1/1 !
+                queue name=rtsp_q leaky=downstream max-size-buffers=2 max-size-bytes=0 max-size-time=0 !
+                identity name=rtsp_tagger !
+                source_funnel.
+            '''
+        else:
+            # Pipeline solo-RTSP: appsrc è l'unica sorgente, niente funnel
+            pipeline_str = f'''
+                appsrc name=rtsp_appsrc is-live=true format=time do-timestamp=true
+                    caps=video/x-raw,format=RGB,width=640,height=640,framerate=1/1 !
+                queue name=rtsp_q leaky=downstream max-size-buffers=2 max-size-bytes=0 max-size-time=0 !
+                identity name=rtsp_tagger !
+                queue name=inference_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
+                hailonet name=inference_hailonet hef-path={self.hef_path} batch-size=1 !
+                queue name=filter_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
+                hailofilter name=inference_hailofilter so-path={post_process_so} qos=false !
+                queue name=callback_q leaky=downstream max-size-buffers=10 max-size-bytes=0 max-size-time=0 !
+                identity name=identity_callback !
+                fakesink sync=false name=sink
+            '''
 
         pipeline_str = ' '.join(line.strip() for line in pipeline_str.split('\n')).strip()
         logger.info(f"Creating pipeline: {pipeline_str}")
@@ -383,11 +470,12 @@ class HeadlessDetectorApp:
     
     def _setup_callback(self):
         """Configura callback e source tagging."""
-        # Setup USB source tagger
-        usb_tagger = self.pipeline.get_by_name("usb_tagger")
-        if usb_tagger:
-            pad = usb_tagger.get_static_pad("src")
-            pad.add_probe(Gst.PadProbeType.BUFFER, self._tag_usb_buffer, None)
+        # Setup USB source tagger (presente solo se webcam USB disponibile)
+        if getattr(self, 'usb_enabled', True):
+            usb_tagger = self.pipeline.get_by_name("usb_tagger")
+            if usb_tagger:
+                pad = usb_tagger.get_static_pad("src")
+                pad.add_probe(Gst.PadProbeType.BUFFER, self._tag_usb_buffer, None)
 
         # Setup RTSP source tagger
         rtsp_tagger = self.pipeline.get_by_name("rtsp_tagger")
@@ -420,15 +508,21 @@ class HeadlessDetectorApp:
         pad.add_probe(Gst.PadProbeType.BUFFER, app_callback, self.user_data)
 
     def _tag_usb_buffer(self, pad, info, user_data):
-        """Marca buffer come proveniente da USB - aggiunge alla coda."""
-        self.source_queue.append(('usb', None))
+        """Marca buffer come proveniente da USB indicizzando per pts."""
+        buffer = info.get_buffer()
+        if buffer and buffer.pts != Gst.CLOCK_TIME_NONE:
+            with self.source_map_lock:
+                self.source_map[buffer.pts] = ('usb', None, time.monotonic())
         return Gst.PadProbeReturn.OK
 
     def _tag_rtsp_buffer(self, pad, info, user_data):
-        """Marca buffer come proveniente da RTSP - aggiunge alla coda."""
-        with self.pending_rtsp_lock:
-            camera_name = getattr(self, '_last_rtsp_camera', 'unknown')
-        self.source_queue.append(('rtsp', camera_name))
+        """Marca buffer come proveniente da RTSP indicizzando per pts."""
+        buffer = info.get_buffer()
+        if buffer and buffer.pts != Gst.CLOCK_TIME_NONE:
+            with self.pending_rtsp_lock:
+                camera_name = getattr(self, '_last_rtsp_camera', 'unknown')
+            with self.source_map_lock:
+                self.source_map[buffer.pts] = ('rtsp', camera_name, time.monotonic())
         return Gst.PadProbeReturn.OK
     
     def start(self):
@@ -463,6 +557,9 @@ class HeadlessDetectorApp:
 
             # Watchdog: controlla ogni 30s che i frame continuino a fluire
             GLib.timeout_add_seconds(30, self._pipeline_watchdog)
+
+            # Cleanup periodico della source_map (entry da buffer droppati)
+            GLib.timeout_add_seconds(10, self._cleanup_source_map)
 
             self.mainloop.run()
 
@@ -509,6 +606,18 @@ class HeadlessDetectorApp:
             _save_window_state(self.window_controller)
             _mark_auto_restart(f"watchdog_no_frames_{elapsed:.0f}s")
             os._exit(1)
+        return True  # Continua il timer
+
+    def _cleanup_source_map(self):
+        """Rimuove entry stale dalla source_map (buffer droppati che non sono mai arrivati al callback)."""
+        cutoff = time.monotonic() - 5.0
+        with self.source_map_lock:
+            stale = [k for k, v in self.source_map.items() if v[2] < cutoff]
+            for k in stale:
+                del self.source_map[k]
+            current_size = len(self.source_map)
+        if stale:
+            logger.debug(f"source_map cleanup: removed {len(stale)} stale entries, size now {current_size}")
         return True  # Continua il timer
 
     def stop(self):
@@ -585,29 +694,65 @@ def app_callback(pad, info, user_data):
     if format and width and height:
         frame = get_numpy_from_buffer(buffer, format, width, height)
 
-    # === ROUTING PER SORGENTE (legge dalla coda) ===
-    source = 'usb'
+    # === ROUTING PER SORGENTE (lookup per pts del buffer) ===
+    source = None
     camera = None
-    if hasattr(user_data, 'app') and user_data.app.source_queue:
-        try:
-            source, camera = user_data.app.source_queue.popleft()
-        except IndexError:
-            pass  # Coda vuota, default USB
+    if buffer.pts != Gst.CLOCK_TIME_NONE and hasattr(user_data, 'app') and user_data.app:
+        with user_data.app.source_map_lock:
+            tag = user_data.app.source_map.pop(buffer.pts, None)
+        if tag:
+            source, camera, _ = tag
+
+    if source is None:
+        # Tag mancante: skip senza assumere USB, per evitare la falsa
+        # didascalia "fai entrare" su frame RTSP. Logga raramente.
+        if app_callback.frame_count % 500 == 0:
+            logger.warning(f"Frame {app_callback.frame_count} pts={buffer.pts} senza source tag, skip")
+        return Gst.PadProbeReturn.OK
 
     # Aggiorna user_data per compatibilità
     user_data.current_source = source
     user_data.current_camera = camera
 
+    # Promozione RTSP a primary quando USB manca: una specifica camera
+    # (PRIMARY_RTSP_FALLBACK_CAMERA) viene trattata come la sorgente USB.
+    app = user_data.app
+    primary_rtsp_active = (
+        source == 'rtsp'
+        and not getattr(app, 'usb_enabled', True)
+        and PRIMARY_RTSP_FALLBACK_CAMERA is not None
+        and camera == PRIMARY_RTSP_FALLBACK_CAMERA
+    )
+
+    # Cattura snapshot USB ~1 volta al secondo per il comando Telegram /foto
+    if source == 'usb' and frame is not None:
+        now_mono = time.monotonic()
+        if now_mono - getattr(app, '_last_usb_snap_time', 0.0) >= 1.0:
+            app._last_usb_snap_time = now_mono
+            try:
+                app._store_last_frame('USB', cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            except Exception as e:
+                logger.debug(f"USB snapshot store failed: {e}")
+
     if source == 'usb':
         _process_usb_frame(buffer, frame, user_data, current_time)
+    elif primary_rtsp_active:
+        _process_usb_frame(buffer, frame, user_data, current_time,
+                           mirror_x=PRIMARY_RTSP_FALLBACK_MIRROR_X)
     else:
         _process_rtsp_frame(buffer, frame, user_data, current_time)
 
     return Gst.PadProbeReturn.OK
 
 
-def _process_usb_frame(buffer, frame, user_data, current_time):
-    """Processa frame USB - logica completa controllo finestra."""
+def _process_usb_frame(buffer, frame, user_data, current_time, mirror_x=False):
+    """Processa frame USB - logica completa controllo finestra.
+
+    Args:
+        mirror_x: se True specchia orizzontalmente le coordinate (1-x). Usato per
+            frame RTSP "promossi" a primary quando la geometria della camera ha
+            la finestra a destra invece che a sinistra come la webcam USB.
+    """
     # Usa DetectionProcessor se disponibile
     if hasattr(user_data, 'app') and user_data.app.detection_processor:
         result = user_data.app.detection_processor.process(
@@ -646,6 +791,13 @@ def _process_usb_frame(buffer, frame, user_data, current_time):
                     'xmin': xmin,
                     'xmax': xmax
                 })
+
+    # Mirror orizzontale per camere con finestra a destra (primary RTSP fallback)
+    if mirror_x:
+        for c in cats_info:
+            c['center_x'] = 1.0 - c['center_x']
+            c['xmin'], c['xmax'] = 1.0 - c['xmax'], 1.0 - c['xmin']
+            c['is_left'] = c['center_x'] < 0.5
 
     # Logica esistente per controllo finestra
     cat_left = any(c['is_left'] for c in cats_info)

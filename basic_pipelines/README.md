@@ -158,7 +158,10 @@ python basic_pipelines/headless_detection.py --input /dev/video0
 - `/chiudi` - Close window
 - `/auto` - Enable automatic mode
 - `/manuale` - Disable automatic mode
-- `/foto` - Request a photo from the system
+- `/foto` - List cameras available for snapshot
+- `/foto <name>` - Send latest snapshot from the named camera (USB or any RTSP camera, e.g. `/foto USB`, `/foto Divano`)
+
+**Photo submenu**: tap the `📸 Foto` button in the persistent keyboard to open a dedicated submenu with one button per camera plus notification on/off and a back button. Snapshots use the last frame seen by the pipeline (RTSP cameras at full source resolution, USB at 640x640).
 
 **Note**: When a cat is detected **outside** (right side), the bot sends a notification with the `/faientrare` command suggestion. This opens the window without changing the current mode.
 

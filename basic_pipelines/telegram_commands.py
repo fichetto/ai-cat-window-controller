@@ -5,6 +5,7 @@ Include comandi per finestra e gestione alimentazione gatti.
 
 import logging
 import asyncio
+from datetime import datetime
 from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     CommandHandler,
@@ -31,7 +32,7 @@ def set_camera_manager(manager):
     global _camera_manager
     _camera_manager = manager
 
-# Mappa bottoni → comandi
+# Mappa bottoni → comandi (solo per i bottoni che mappano 1:1 su un comando)
 BUTTON_MAP = {
     "🟢 Apri": "/apri",
     "🔴 Chiudi": "/chiudi",
@@ -46,13 +47,31 @@ BUTTON_MAP = {
     "🎛️ Servo": "/servo",
 }
 
+# Etichette pulsanti per il sottomenu Foto: (etichetta_bottone → nome_camera passato a /foto)
+FOTO_BUTTONS = {
+    "📸 USB": "USB",
+    "📸 Corridoio": "Corridoio",
+    "📸 Divano": "Divano",
+    "📸 Portico": "Portico",
+}
+
 def get_main_keyboard():
     """Crea la tastiera persistente con bottoni."""
     keyboard = [
         [KeyboardButton("🟢 Apri"), KeyboardButton("🔴 Chiudi"), KeyboardButton("🐱 Fai entrare")],
         [KeyboardButton("🤖 Auto"), KeyboardButton("👋 Manuale"), KeyboardButton("📊 Status")],
         [KeyboardButton("🔔 Notifiche ON"), KeyboardButton("🔕 Notifiche OFF"), KeyboardButton("📷 Telecamere")],
-        [KeyboardButton("🔧 Reset Servo"), KeyboardButton("🎛️ Servo")],
+        [KeyboardButton("📸 Foto"), KeyboardButton("🔧 Reset Servo"), KeyboardButton("🎛️ Servo")],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_foto_keyboard():
+    """Sottomenu Foto: scelta camera + toggle notifiche + indietro."""
+    keyboard = [
+        [KeyboardButton("📸 USB"), KeyboardButton("📸 Corridoio")],
+        [KeyboardButton("📸 Divano"), KeyboardButton("📸 Portico")],
+        [KeyboardButton("🔔 Notifiche ON"), KeyboardButton("🔕 Notifiche OFF")],
+        [KeyboardButton("⬅️ Indietro")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -129,7 +148,7 @@ class TelegramCommands:
             BotCommand("status", "Mostra lo stato del sistema"),
             BotCommand("auto", "Attiva controllo automatico"),
             BotCommand("manuale", "Disattiva controllo automatico"),
-            BotCommand("foto", "Richiedi una foto dal sistema"),
+            BotCommand("foto", "Snapshot telecamera: /foto [nome] (USB o RTSP)"),
             # Comandi telecamere RTSP
             BotCommand("telecamere", "Lista telecamere e stato"),
             BotCommand("cam", "Abilita/disabilita camera: /cam nome on|off"),
@@ -228,13 +247,35 @@ class TelegramCommands:
     async def _button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gestisce i tap sui bottoni della tastiera."""
         text = update.message.text
+
+        # Navigazione sottomenu Foto
+        if text == "📸 Foto":
+            logger.info("Button pressed: 📸 Foto -> open foto submenu")
+            await update.message.reply_text(
+                "📷 Scegli la telecamera per la foto, oppure attiva/disattiva le notifiche:",
+                reply_markup=get_foto_keyboard()
+            )
+            return
+        if text == "⬅️ Indietro":
+            logger.info("Button pressed: ⬅️ Indietro -> main keyboard")
+            await update.message.reply_text("⬅️ Menu principale", reply_markup=get_main_keyboard())
+            return
+
+        # Bottoni del sottomenu foto: scatto da camera specifica
+        if text in FOTO_BUTTONS:
+            camera_name = FOTO_BUTTONS[text]
+            logger.info(f"Button pressed: {text} -> /foto {camera_name}")
+            context.args = [camera_name]
+            await self._photo_command(update, context)
+            return
+
+        # Bottoni mappati 1:1 su un comando
         command = BUTTON_MAP.get(text)
         if command is None:
             return  # Ignora messaggi non riconosciuti
 
         logger.info(f"Button pressed: {text} -> {command}")
 
-        # Mappa comando → handler
         handlers = {
             "/apri": self._open_command,
             "/chiudi": self._close_command,
@@ -415,9 +456,83 @@ class TelegramCommands:
             logger.error(error_msg)
 
     async def _photo_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Gestisce il comando /foto."""
-        await update.message.reply_text("⚠️ Funzionalità non implementata")
-        logger.warning("Photo command not implemented in base class")
+        """Gestisce il comando /foto - Snapshot dall'ultimo frame ricevuto.
+
+        Uso:
+          /foto             → lista delle telecamere disponibili
+          /foto <nome>      → invia lo snapshot della telecamera (USB o RTSP)
+        """
+        global _camera_manager
+        logger.info(f"Photo command received: args={context.args}")
+
+        if _camera_manager is None or not hasattr(_camera_manager, 'get_snapshot'):
+            await update.message.reply_text("⚠️ Snapshot non disponibile (camera manager assente)")
+            return
+
+        # Senza argomenti: lista
+        if not context.args:
+            available = _camera_manager.get_available_snapshots()
+            if not available:
+                await update.message.reply_text(
+                    "📷 Nessuno snapshot ancora disponibile.\n"
+                    "Le telecamere stanno appena partendo, riprova tra qualche secondo."
+                )
+                return
+
+            from datetime import datetime as _dt
+            now = _dt.now()
+            lines = ["📷 *Telecamere disponibili per /foto:*\n"]
+            for name, ts in available:
+                age = (now - ts).total_seconds()
+                lines.append(f"• `{name}` _(frame di {age:.0f}s fa)_")
+            lines.append("\nUso: `/foto <nome>`")
+            await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+            return
+
+        # Con argomento: invia foto
+        name = " ".join(context.args)
+        snap = _camera_manager.get_snapshot(name)
+        if snap is None:
+            available = [n for n, _ in _camera_manager.get_available_snapshots()]
+            await update.message.reply_text(
+                f"❌ Telecamera '{name}' non trovata o senza frame.\n"
+                f"Disponibili: {', '.join(available) if available else 'nessuna'}"
+            )
+            return
+
+        frame_bgr, ts = snap
+
+        # Encode JPG fuori dal loop asincrono (cv2 è sincrono)
+        import cv2
+        import io
+        loop = asyncio.get_event_loop()
+
+        def _encode():
+            ok, buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not ok:
+                return None
+            return buf.tobytes()
+
+        try:
+            jpg = await loop.run_in_executor(None, _encode)
+        except Exception as e:
+            logger.error(f"Photo encode error: {e}")
+            await update.message.reply_text(f"❌ Errore encoding JPG: {e}")
+            return
+
+        if jpg is None:
+            await update.message.reply_text("❌ Encoding JPG fallito")
+            return
+
+        age = (datetime.now() - ts).total_seconds() if isinstance(ts, datetime) else 0
+        h, w = frame_bgr.shape[:2]
+        caption = f"📷 {name} — {w}x{h}, frame di {age:.0f}s fa"
+
+        try:
+            await update.message.reply_photo(photo=io.BytesIO(jpg), caption=caption)
+        except Exception as e:
+            logger.error(f"Photo send error: {e}")
+            await update.message.reply_text(f"❌ Invio foto fallito: {e}")
 
     # ==================== COMANDI MANUTENZIONE ====================
 
