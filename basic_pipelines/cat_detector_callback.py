@@ -10,11 +10,28 @@ import logging
 from datetime import datetime, timedelta
 from hailo_rpi_common import app_callback_class
 
+try:
+    from cat_config import NIGHT_INHIBIT_CONFIG
+except ImportError:
+    NIGHT_INHIBIT_CONFIG = {'enabled': False, 'start_hour': 22, 'end_hour': 7}
+
 # Configurazione logging
 logger = logging.getLogger(__name__)
 
 # File persistente per le preferenze notifiche RTSP (non in /tmp/ per sopravvivere ai reboot)
 RTSP_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.rtsp_notifications.json')
+
+
+def is_night_inhibit_active(current_time):
+    """True se l'apertura automatica deve essere inibita (ore di buio)."""
+    if not NIGHT_INHIBIT_CONFIG.get('enabled', False):
+        return False
+    hour = current_time.hour
+    start = NIGHT_INHIBIT_CONFIG['start_hour']
+    end = NIGHT_INHIBIT_CONFIG['end_hour']
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
 
 class HeadlessCatDetectorCallback(app_callback_class):
     """
@@ -107,27 +124,31 @@ class HeadlessCatDetectorCallback(app_callback_class):
                 return True
         return False
 
-    def save_cat_image(self, frame, confidence):
+    def save_cat_image(self, frame, confidence, tag="", force=False):
         """
         Salva l'immagine del gatto con timestamp e confidenza.
-        
+
         Args:
             frame (numpy.ndarray): Frame video da salvare
             confidence (float): Confidenza del rilevamento
-            
+            tag (str): Suffisso opzionale per il filename (es. "exit")
+            force (bool): Se True bypassa cooldown e soglia di confidenza
+
         Returns:
             str or None: Percorso del file salvato o None se il salvataggio fallisce
         """
-        if not self.should_capture_image(confidence):
+        if not force and not self.should_capture_image(confidence):
             return None
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{self.save_dir}/cat_{timestamp}_conf{confidence:.2f}.jpg"
-        
+        suffix = f"_{tag}" if tag else ""
+        filename = f"{self.save_dir}/cat{suffix}_{timestamp}_conf{confidence:.2f}.jpg"
+
         try:
             cv2.imwrite(filename, frame)
-            self.last_capture_time = datetime.now()
-            logger.info(f"Cat image saved: {filename} (confidence: {confidence:.2f})")
+            if not force:
+                self.last_capture_time = datetime.now()
+            logger.info(f"Cat image saved: {filename} (confidence: {confidence:.2f}, tag={tag or 'none'})")
             return filename
         except Exception as e:
             logger.error(f"Error saving image: {e}")
@@ -294,8 +315,24 @@ class HeadlessCatDetectorCallback(app_callback_class):
                     logger.info(f"Cooldown progressivo attivo: {remaining}s rimanenti (ciclo {self.auto_cycle_count})")
                     return
 
+                # Inibizione notturna: telecamere IR meno affidabili al buio
+                if is_night_inhibit_active(current_time):
+                    if not getattr(self, '_night_inhibit_logged', False):
+                        start_h = NIGHT_INHIBIT_CONFIG['start_hour']
+                        end_h = NIGHT_INHIBIT_CONFIG['end_hour']
+                        logger.info(
+                            f"Apertura inibita (ore di buio {start_h:02d}:00-{end_h:02d}:00, "
+                            f"telecamera IR poco affidabile). Usa /faientrare per aprire manualmente."
+                        )
+                        self._night_inhibit_logged = True
+                    return
+
+                # Reset flag log inibizione una volta usciti dalla fascia notturna
+                self._night_inhibit_logged = False
+
                 if self.window_controller.set_window_position(True, manual=False):
                     self.last_auto_open_time = current_time
+                    self.window_opened_for_exit = True
                     # Crea messaggio con info posizione
                     message = "🐱 Gatto a sinistra (solo), apro la finestra"
                     if best_cat:
@@ -304,6 +341,20 @@ class HeadlessCatDetectorCallback(app_callback_class):
                         message += f"\n• Confidenza: {best_cat['confidence']:.2f}"
 
                     logger.info(f"Opening window - {message}")
+
+                    # Foto del gatto in uscita (sempre, no cooldown) per riconoscimento
+                    if frame is not None and self.telegram:
+                        try:
+                            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                            saved_path = self.save_cat_image(frame_bgr, max_confidence, tag="exit", force=True)
+                            if saved_path:
+                                caption = "🐾 Gatto in uscita — finestra aperta"
+                                if best_cat:
+                                    caption += f"\n• Confidenza: {best_cat['confidence']:.2f}"
+                                self.telegram.send_photo(saved_path, caption=caption)
+                        except Exception as e:
+                            logger.error(f"Errore invio foto uscita: {e}")
+
                     if self.telegram:
                         self.telegram.send_window_status(True, message)
         else:
