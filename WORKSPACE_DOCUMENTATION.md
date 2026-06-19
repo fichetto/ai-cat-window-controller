@@ -23,10 +23,17 @@ hailo-rpi5-examples/
 ├── doc/                      # Documentazione installazione
 ├── tests/                    # Test suite
 ├── community_projects/       # Progetti della community
+├── system-config/            # Config di sistema versionati (logrotate, mosquitto, udev, watchdog, cleanup)
 ├── detected_cats/            # Immagini catturate automaticamente
 ├── named_cats/               # Dataset gatti identificati
 └── dataset/                  # Split train/val/test per ML
 ```
+
+> `system-config/` raccoglie i file di configurazione installati a livello di OS
+> (deployati fuori dal repo) tenuti sotto versione per riferimento:
+> - `logrotate/cat-window` — rotazione dei log del servizio
+> - `cleanup-detections.sh` — pulizia giornaliera immagini detection (retention 7 giorni, via crontab)
+> - `mosquitto/`, `sysctl/`, `udev/`, `watchdog/` — broker MQTT, tuning kernel, regole device, watchdog
 
 ---
 
@@ -77,7 +84,7 @@ hailo-rpi5-examples/
 | File | Descrizione | Funzionalità Chiave |
 |------|-------------|---------------------|
 | [telegram_base.py](basic_pipelines/telegram_base.py) | Fondazione bot Telegram | Classe `TelegramBase`, inizializzazione bot in thread separato, watchdog heartbeat ogni 5 min, coda retry con backoff esponenziale, restart dopo 15 min timeout |
-| [telegram_commands.py](basic_pipelines/telegram_commands.py) | Gestione comandi | Classe mixin `TelegramCommands`, comandi: `/start`, `/apri`, `/chiudi`, `/status`, `/auto`, `/manuale`, `/foto`, `/gatti`, `/classifica`, `/registra`, retry logic 3 tentativi |
+| [telegram_commands.py](basic_pipelines/telegram_commands.py) | Gestione comandi | Classe mixin `TelegramCommands`, comandi: `/start`, `/apri`, `/chiudi`, `/status`, `/auto`, `/manuale`, `/foto`, `/gatti`, `/classifica`, `/registra`, retry logic 3 tentativi. `/foto` usa timeout estesi (read/write 60s) sull'upload per evitare falsi "Timed out" mentre la foto viene comunque consegnata |
 | [telegram_notifications.py](basic_pipelines/telegram_notifications.py) | Sistema notifiche | Classe mixin `TelegramNotifications`, notifiche startup/shutdown, aggiornamenti stato finestra, alert rilevamento gatti con foto e confidence |
 | [telegram_handler.py](basic_pipelines/telegram_handler.py) | Orchestratore Telegram integrato | Classe `TelegramHandler` che eredita da Base, Commands, Notifications, statistiche sistema, gestione cattura foto |
 

@@ -165,6 +165,7 @@ build.release/
 
 # Cat detector specific - logs and data
 *.log
+*.log.*
 hailort*.log
 cat_detector.log
 detected_cats/
@@ -202,6 +203,7 @@ basic_pipelines/cat_feeder_photos/
 # Screenshots nella root
 /Screenshot*.png
 /Screenshot*.jpg
+/WhatsApp Image*.jpeg
 
 # IDE
 .vscode/

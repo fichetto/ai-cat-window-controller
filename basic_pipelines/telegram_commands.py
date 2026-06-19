@@ -529,7 +529,17 @@ class TelegramCommands:
         caption = f"📷 {name} — {w}x{h}, frame di {age:.0f}s fa"
 
         try:
-            await update.message.reply_photo(photo=io.BytesIO(jpg), caption=caption)
+            # Timeout generosi: l'upload della foto a Telegram può superare
+            # i default (15s) sotto jitter di rete, generando un falso "Timed out"
+            # anche quando la foto è in realtà stata consegnata.
+            await update.message.reply_photo(
+                photo=io.BytesIO(jpg),
+                caption=caption,
+                read_timeout=60,
+                write_timeout=60,
+                connect_timeout=15,
+                pool_timeout=20,
+            )
         except Exception as e:
             logger.error(f"Photo send error: {e}")
             await update.message.reply_text(f"❌ Invio foto fallito: {e}")
