@@ -58,6 +58,8 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+# httpx logga ogni richiesta a INFO con l'URL completo, che contiene il token del bot Telegram
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Limite massimo di memoria (1.2GB) - se superato, il processo si riavvia
