@@ -20,14 +20,33 @@ from telegram.ext import (
     ContextTypes
 )
 from telegram.error import (
-    TelegramError, 
-    NetworkError, 
-    TimedOut, 
+    TelegramError,
+    NetworkError,
+    TimedOut,
     RetryAfter
 )
+from telegram.request import HTTPXRequest
 
 # Configurazione logging
 logger = logging.getLogger(__name__)
+
+
+class _PollingRequest(HTTPXRequest):
+    """
+    Request usata solo per getUpdates: segnala ogni long-poll completato.
+    Il long-poll ritorna ogni ~10s anche senza messaggi, quindi è un battito
+    affidabile del polling (a differenza degli update, che dipendono dall'utente).
+    """
+
+    def __init__(self, on_poll_completed: Callable[[], None]):
+        super().__init__()  # Stessi default che ApplicationBuilder usa per getUpdates
+        self._on_poll_completed = on_poll_completed
+
+    async def do_request(self, *args, **kwargs):
+        code, payload = await super().do_request(*args, **kwargs)
+        if code == 200:
+            self._on_poll_completed()
+        return code, payload
 
 class TelegramBase:
     """
@@ -63,9 +82,11 @@ class TelegramBase:
         self.watchdog_running = False
         self.watchdog_interval = 300  # Controlla ogni 5 minuti
         self.heartbeat_timeout = 900  # 15 minuti senza heartbeat = problema
-        self.polling_timeout = 300  # 5 minuti senza update ricevuti = problema (rileva polling bloccato)
+        self.polling_timeout = 300  # 5 minuti senza getUpdates completati = polling bloccato
         self.connection_failures = 0  # Contatore fallimenti consecutivi
         self.max_connection_failures = 3  # Riavvia dopo 3 fallimenti consecutivi
+        self.send_failures = 0  # Invii falliti consecutivi (tutti i retry esauriti)
+        self.max_send_failures = 2  # API OK ma invii falliti = pool connessioni stantio
         self.bot_init_failures = 0  # Contatore fallimenti inizializzazione bot
         self.max_bot_init_failures = 6  # Dopo 6 fallimenti (30 min) termina il processo
 
@@ -160,6 +181,12 @@ class TelegramBase:
                         logger.error(f"Watchdog: API OK ma polling bloccato da {time_since_polling:.0f}s - Riavvio bot")
                         self._restart_bot()
                         self.connection_failures = 0
+                    elif self.send_failures >= self.max_send_failures:
+                        # getMe e polling usano connessioni proprie: se solo gli invii falliscono
+                        # il pool degli invii è stantio e va ricreato
+                        logger.error(f"Watchdog: API OK ma {self.send_failures} invii falliti di fila - Riavvio bot")
+                        self._restart_bot()
+                        self.connection_failures = 0
                     else:
                         # Tutto OK
                         if self.connection_failures > 0:
@@ -187,7 +214,7 @@ class TelegramBase:
             with urllib.request.urlopen(req, timeout=10) as response:
                 if response.status == 200:
                     self.last_heartbeat = time.time()
-                    # NON aggiornare last_polling_time qui - solo _on_any_update lo fa
+                    # NON aggiornare last_polling_time qui - solo il polling stesso lo fa
                     return True
             return False
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
@@ -247,6 +274,7 @@ class TelegramBase:
                 logger.info("✅ Bot riavviato con successo")
                 self.last_heartbeat = time.time()
                 self.last_polling_time = time.time()
+                self.send_failures = 0
             else:
                 logger.error("❌ Riavvio del bot fallito")
 
@@ -324,7 +352,12 @@ class TelegramBase:
         """
         try:
             # Crea l'applicazione con gestione automatica delle eccezioni
-            self.application = ApplicationBuilder().token(self.token).build()
+            self.application = (
+                ApplicationBuilder()
+                .token(self.token)
+                .get_updates_request(_PollingRequest(self._mark_polling_alive))
+                .build()
+            )
             
             # Inizializza ma non avviare ancora i componenti
             await self.application.initialize()
@@ -363,6 +396,10 @@ class TelegramBase:
         """
         pass
 
+    def _mark_polling_alive(self):
+        """Chiamato da _PollingRequest a ogni getUpdates completato."""
+        self.last_polling_time = time.time()
+
     async def _on_any_update(self, update, context):
         """
         Handler chiamato per ogni update ricevuto dal polling.
@@ -393,7 +430,15 @@ class TelegramBase:
         else:
             logger.error("Event loop not available or bot not initialized")
         return None
-    
+
+    def _submit_coroutine(self, coroutine):
+        """
+        Pianifica una coroutine nel loop del bot senza attenderne il risultato.
+        Gli invii gestiscono già retry ed errori al loro interno: attenderli
+        bloccherebbe il chiamante (es. la pipeline di detection) fino a 10s.
+        """
+        asyncio.run_coroutine_threadsafe(coroutine, self.event_loop)
+
     def send_message(self, text: str) -> bool:
         """
         Invia un messaggio di testo con gestione degli errori.
@@ -406,7 +451,7 @@ class TelegramBase:
         """
         if self.application and self.event_loop and self.bot_initialized:
             try:
-                self._run_coroutine(self._send_message(text))
+                self._submit_coroutine(self._send_message(text))
                 return True
             except Exception as e:
                 logger.error(f"Error sending message, queuing for retry: {e}")
@@ -443,6 +488,7 @@ class TelegramBase:
                     logger.debug(f"Message sent successfully: {text[:50]}...")
                     # Aggiorna l'heartbeat dopo un invio riuscito
                     self.last_heartbeat = time.time()
+                    self.send_failures = 0
                     return True
                 except RetryAfter as e:
                     # Ritardo richiesto da Telegram
@@ -459,7 +505,9 @@ class TelegramBase:
                     if attempt == self.max_retries - 1:
                         raise
                     await asyncio.sleep(self.base_retry_delay * (2 ** attempt))
-            
+
+            # Tutti i tentativi falliti per errori di rete
+            self.send_failures += 1
             return False
         except Exception as e:
             logger.error(f"Final error sending message: {e}")
@@ -478,7 +526,7 @@ class TelegramBase:
         """
         if self.application and self.event_loop and self.bot_initialized:
             try:
-                self._run_coroutine(self._send_photo(photo_path, caption))
+                self._submit_coroutine(self._send_photo(photo_path, caption))
                 return True
             except Exception as e:
                 logger.error(f"Error sending photo, queuing for retry: {e}")
@@ -517,6 +565,7 @@ class TelegramBase:
                     logger.debug(f"Photo sent successfully: {photo_path}")
                     # Aggiorna l'heartbeat dopo un invio riuscito
                     self.last_heartbeat = time.time()
+                    self.send_failures = 0
                     return True
                 except FileNotFoundError:
                     logger.error(f"Photo file not found: {photo_path}")
@@ -536,7 +585,9 @@ class TelegramBase:
                     if attempt == self.max_retries - 1:
                         raise
                     await asyncio.sleep(self.base_retry_delay * (2 ** attempt))
-            
+
+            # Tutti i tentativi falliti per errori di rete
+            self.send_failures += 1
             return False
         except Exception as e:
             logger.error(f"Final error sending photo: {e}")
